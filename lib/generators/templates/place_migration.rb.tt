@@ -1,0 +1,21 @@
+class CreateOverturePlaces < ActiveRecord::Migration[<%= migration_version %>]
+  def change
+    create_table :overture_places, id: :string, primary_key: :id do |t|
+      t.string :names, array: true, default: []
+      t.jsonb :categories, default: {}
+      t.jsonb :brands, default: {}
+      t.jsonb :addresses, default: []
+      t.string :confidence
+      t.float :elevation
+      t.string :country
+      t.geometry :geometry, geographic: true
+
+      t.timestamps
+    end
+
+    add_index :overture_places, :geometry, using: :gist
+    add_index :overture_places, :country
+    add_index :overture_places, :categories, using: :gin
+    add_index :overture_places, :brands, using: :gin
+  end
+end

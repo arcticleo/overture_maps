@@ -1,0 +1,19 @@
+class CreateOvertureBuildings < ActiveRecord::Migration[<%= migration_version %>]
+  def change
+    create_table :overture_buildings, id: :string, primary_key: :id do |t|
+      t.string :names, array: true, default: []
+      t.float :height
+      t.integer :level
+      t.string :class
+      t.boolean :is_underground, default: false
+      t.geometry :geometry, geographic: true
+
+      t.timestamps
+    end
+
+    add_index :overture_buildings, :geometry, using: :gist
+    add_index :overture_buildings, :height
+    add_index :overture_buildings, :level
+    add_index :overture_buildings, :class
+  end
+end

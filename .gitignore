@@ -1,0 +1,18 @@
+.bundle/
+pkg/
+*.gem
+Gemfile.lock
+coverage/
+.rspec
+log/
+tmp/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db

@@ -1,0 +1,19 @@
+class CreateOvertureAddresses < ActiveRecord::Migration[<%= migration_version %>]
+  def change
+    create_table :overture_addresses, id: :string, primary_key: :id do |t|
+      t.string :street
+      t.string :locality
+      t.string :region
+      t.string :country
+      t.string :postcode
+      t.geometry :geometry, geographic: true
+
+      t.timestamps
+    end
+
+    add_index :overture_addresses, :geometry, using: :gist
+    add_index :overture_addresses, :country
+    add_index :overture_addresses, :locality
+    add_index :overture_addresses, :postcode
+  end
+end

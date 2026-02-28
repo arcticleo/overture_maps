@@ -20,12 +20,12 @@ Gem::Specification.new do |spec|
   spec.add_dependency "rails", ">= 7.0"
   spec.add_dependency "rgeo", "~> 3.0"
   spec.add_dependency "rgeo-activerecord", "~> 8.0"
+  spec.add_dependency "parquet", "~> 0.0" # Apache Parquet Ruby bindings
+  spec.add_dependency "aws-sdk-s3", "~> 1.0" # For S3 access
+  spec.add_dependency "duckdb", "~> 0.10" # For spatial queries with bbox/division filtering
 
-  # Optional dependencies for Parquet import (add these manually for cloud storage support)
-  # spec.add_dependency "parquet", "~> 0.0" # Apache Parquet Ruby bindings
-  # spec.add_dependency "aws-sdk-s3", "~> 1.0" # For S3 access
+  # Optional dependencies
   # spec.add_dependency "azure-storage-blob", "~> 12.0" # For Azure Blob access
-  # spec.add_dependency "duckdb", "~> 0.10" # For spatial queries with DuckDB
 
   # Development dependencies
   spec.add_development_dependency "rspec", "~> 3.12"

@@ -15,7 +15,6 @@ module OvertureMaps
         "transportation" => %w[connector segment]
       }.freeze
 
-      DEFAULT_VERSION = "2025-01-17"
       S3_BUCKET = "overturemaps-us-west-2"
       S3_REGION = "us-west-2"
       AZURE_ACCOUNT = "overturemapswestus2"
@@ -26,7 +25,7 @@ module OvertureMaps
       def initialize(theme:, type: nil, version: nil, output_dir: nil)
         @theme = theme
         @type = type
-        @version = version || DEFAULT_VERSION
+        @version = version || self.class.latest_version
         @output_dir = output_dir || Dir.pwd
       end
 
@@ -232,7 +231,7 @@ module OvertureMaps
 
       # List available types for a theme
       def self.list_types(theme:, version: nil)
-        v = version || DEFAULT_VERSION
+        v = version || latest_version
 
         require "aws-sdk-s3" unless defined?(Aws::S3Client)
 
@@ -284,7 +283,7 @@ module OvertureMaps
       def self.search_divisions(query:, version: nil)
         require "duckdb"
 
-        v = version || DEFAULT_VERSION
+        v = version || latest_version
 
         db = DuckDB::Database.new
         conn = db.connect
@@ -324,7 +323,7 @@ module OvertureMaps
       def self.get_division_bbox(division_id:, version: nil)
         require "duckdb"
 
-        v = version || DEFAULT_VERSION
+        v = version || latest_version
 
         db = DuckDB::Database.new
         conn = db.connect

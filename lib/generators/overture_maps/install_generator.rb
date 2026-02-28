@@ -14,6 +14,12 @@ module OvertureMaps
           "db/migrate/create_overture_postgis.rb"
         )
 
+        # Create categories table first (referenced by places)
+        migration_template(
+          "category_migration.rb.tt",
+          "db/migrate/create_overture_categories.rb"
+        )
+
         # Create all migrations
         migration_template(
           "place_migration.rb.tt",
@@ -33,6 +39,11 @@ module OvertureMaps
 
       def create_models
         puts "Creating Overture Maps models..."
+
+        template(
+          "category_model.rb.tt",
+          "app/models/overture_category.rb"
+        )
 
         template(
           "place_model.rb.tt",

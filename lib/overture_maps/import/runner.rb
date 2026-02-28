@@ -18,11 +18,20 @@ module OvertureMaps
       end
 
       # Import from a file path
-      def import_from_file(path, transform: nil)
+      def import_from_file(path, transform: nil, filter: nil)
         reader = ParquetReader.new(theme: theme_from_class)
+
+        import_from_reader(reader, source: path, transform: transform, filter: filter)
+      end
+
+      # Import from a ParquetReader
+      def import_from_reader(reader, source:, transform: nil, filter: nil)
         records = []
 
-        reader.each_record(source: path) do |record|
+        reader.each_record(source: source) do |record|
+          # Apply filter if provided
+          next if filter && !filter.call(record)
+
           transformed = transform ? transform.call(record) : record_to_attributes(record)
 
           if transformed
@@ -42,10 +51,13 @@ module OvertureMaps
       end
 
       # Import from an Enumerable of records
-      def import_from_records(records, transform: nil)
+      def import_from_records(records, transform: nil, filter: nil)
         batch = []
 
         records.each do |record|
+          # Apply filter if provided
+          next if filter && !filter.call(record)
+
           transformed = transform ? transform.call(record) : record_to_attributes(record)
 
           if transformed

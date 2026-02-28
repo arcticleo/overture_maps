@@ -8,6 +8,7 @@ require "overture_maps/models/base"
 require "overture_maps/models/place"
 require "overture_maps/models/building"
 require "overture_maps/models/address"
+require "overture_maps/models/category"
 require "overture_maps/import"
 require "overture_maps/import/downloader"
 

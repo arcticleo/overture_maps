@@ -7,14 +7,60 @@ require "overture_maps/import/runner"
 
 namespace :overture_maps do
   namespace :import do
+    desc "Fetch and import categories from Overture Maps taxonomy"
+    task :categories, [] do
+      require_model("OvertureCategory")
+
+      puts "Fetching categories from Overture Maps taxonomy..."
+
+      url = "https://raw.githubusercontent.com/OvertureMaps/schema/main/docs/schema/concepts/by-theme/places/overture_categories.csv"
+
+      require "net/http"
+      require "csv"
+
+      response = Net::HTTP.get(URI(url))
+      raise "Failed to fetch categories" unless response
+
+      csv = CSV.new(response, headers: false, col_sep: ";")
+      count = 0
+
+      csv.each do |row|
+        next if row.empty?
+
+        name = row[0]&.strip
+        taxonomy_str = row[1]&.strip
+
+        next if name.nil? || name.empty?
+
+        # Parse taxonomy to extract primary category and hierarchy level
+        taxonomy = taxonomy_str.gsub(/[\[\]]/, "").split(",").map(&:strip)
+        primary = taxonomy.first
+        hierarchy_level = taxonomy.size - 1
+
+        OvertureCategory.find_or_create_by!(name: name) do |c|
+          c.primary_category = primary
+          c.hierarchy_level = hierarchy_level
+        end
+        count += 1
+      end
+
+      puts "Imported #{count} categories!"
+      puts "\nPrimary categories available:"
+      OvertureCategory.distinct.pluck(:primary_category).compact.sort.each do |pc|
+        puts "  - #{pc}"
+      end
+    end
+
     desc "Import places from Overture Maps Parquet files"
-    task :places, [:region, :source] do |_t, args|
+    task :places, [:region, :source, :categories] do |_t, args|
       region = args[:region]
       source = args[:source]&.to_sym || :s3
+      categories = args[:categories]&.split(",")&.map(&:strip)
 
       require_model("OverturePlace")
 
       puts "Importing places#{region ? " for region: #{region}" : ""} from #{source}..."
+      puts "Filtering by categories: #{categories.join(", ")}" if categories
 
       reader = OvertureMaps::Import::ParquetReader.new(
         theme: "places",
@@ -26,7 +72,9 @@ namespace :overture_maps do
         batch_size: ENV.fetch("BATCH_SIZE", 1000).to_i
       )
 
-      runner.import_from_reader(reader, source: source) do |record|
+      filter = categories ? ->(record) { matches_category?(record, categories) } : nil
+
+      runner.import_from_reader(reader, source: source, filter: filter) do |record|
         transform_place_record(record)
       end
 
@@ -149,6 +197,29 @@ def print_results(runner)
   exit 1 unless runner.success?
 end
 
+def matches_category?(record, categories)
+  record_categories = record["categories"]
+  return false unless record_categories
+
+  # categories can be a JSON string or hash
+  cat_hash = case record_categories
+             when String then JSON.parse(record_categories)
+             when Hash then record_categories
+             else return false
+             end
+
+  return false unless cat_hash.is_a?(Hash)
+
+  # Check if any of the requested categories match
+  # Can match primary category (key) or any sub-category (value)
+  categories.any? do |wanted|
+    # Check if it's a primary category
+    cat_hash.key?(wanted) ||
+      # Check if it's a sub-category
+      cat_hash.values.any? { |v| Array(v).include?(wanted) }
+  end
+end
+
 def transform_place_record(record)
   {
     id: record["id"],
@@ -191,6 +262,64 @@ def transform_address_record(record)
     created_at: Time.current,
     updated_at: Time.current
   }
+end
+
+namespace :categories do
+  CATEGORIES_URL = "https://raw.githubusercontent.com/OvertureMaps/schema/main/docs/schema/concepts/by-theme/places/overture_categories.csv"
+
+  desc "Fetch categories from Overture Maps schema and populate database"
+  task :populate, [] do
+    require_model("OvertureCategory")
+
+    puts "Fetching categories from Overture Maps schema..."
+
+    require "net/http"
+    require "csv"
+
+    uri = URI(CATEGORIES_URL)
+    response = Net::HTTP.get(uri)
+
+    count = 0
+    CSV.parse(response, col_sep: ";") do |row|
+      name, taxonomy_str = row
+      next unless name && taxonomy_str
+
+      # Parse taxonomy like [eat_and_drink,restaurant]
+      taxonomy = taxonomy_str.tr("[]", "").split(",").map(&:strip)
+      primary = taxonomy.first
+      hierarchy_level = taxonomy.length - 1
+
+      OvertureCategory.find_or_create_by!(name: name) do |c|
+        c.primary_category = primary
+        c.hierarchy_level = hierarchy_level
+      end
+      count += 1
+    end
+
+    puts "Populated #{count} categories!"
+  end
+
+  desc "List all categories"
+  task :list, [] do
+    require_model("OvertureCategory")
+
+    puts "Primary categories:"
+    OvertureCategory.distinct.pluck(:primary_category).compact.sort.each do |pc|
+      puts "  - #{pc}"
+      OvertureCategory.where(primary_category: pc).order(:hierarchy_level, :name).each do |cat|
+        puts "      #{cat.name}"
+      end
+    end
+  end
+
+  desc "List primary categories only"
+  task :primary, [] do
+    require_model("OvertureCategory")
+
+    OvertureCategory.distinct.pluck(:primary_category).compact.sort.each do |pc|
+      puts pc
+    end
+  end
 end
 
 def parse_wkb_geometry(geom)

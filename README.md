@@ -51,12 +51,31 @@ This creates:
 - Migration for `overture_places` table
 - Migration for `overture_buildings` table
 - Migration for `overture_addresses` table
+- Migration for `overture_categories` table
 - Model files
 
 Then run migrations:
 
 ```bash
 rails db:migrate
+```
+
+### Fetch Categories (Recommended)
+
+Before importing places, fetch the categories taxonomy:
+
+```bash
+rails overture_maps:import:categories:populate
+```
+
+This fetches all ~2,100 categories from Overture Maps schema. You can then list them:
+
+```bash
+# List all categories
+rails overture_maps:import:categories:list
+
+# List just primary categories
+rails overture_maps:import:categories:primary
 ```
 
 ### Generate Individual Models
@@ -201,8 +220,12 @@ Overture Maps data is organized by **theme** and **type**:
 ### Import from Parquet Files
 
 ```bash
-# Import places
+# Import places from downloaded Parquet file
 rails overture_maps:import:places[/path/to/places.parquet]
+
+# Import places with category filter
+rails overture_maps:import:places[,s3,eat_and_drink]
+rails overture_maps:import:places[/path/to/file.parquet,,cafes,restaurants]
 
 # Import buildings
 rails overture_maps:import:buildings[/path/to/buildings.parquet]
@@ -213,6 +236,19 @@ rails overture_maps:import:addresses[/path/to/addresses.parquet]
 # Check record count
 rails overture_maps:count[/path/to/file.parquet]
 ```
+
+**Category filtering:** When importing places, you can filter by categories to only import specific types of places:
+
+```bash
+# Import only places with eat_and_drink category (includes cafes, restaurants, etc.)
+rails overture_maps:import:places[,s3,eat_and_drink]
+
+# Import multiple specific categories (primary or sub-category)
+rails overture_maps:import:places[,s3,cafes]
+rails overture_maps:import:places[,s3,cafes,hotels]
+```
+
+Use `rails overture_maps:import:categories:primary` to see available primary categories.
 
 ### Programmatic Import
 

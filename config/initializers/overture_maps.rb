@@ -1,14 +1,9 @@
-# Configure OvertureMaps API key
+# Configure OvertureMaps gem
 #
-# Example usage:
-#   OvertureMaps.configure do |config|
-#     config.api_key = ENV["OVERTOURE_MAPS_API_KEY"]
-#   end
-#
-# Or set directly:
-#   OvertureMaps.api_key = ENV["OVERTOURE_MAPS_API_KEY"]
+# The gem downloads data directly from S3/Azure,
+# so no API key is required.
 
-OvertureMaps.configure do |config|
-  config.api_key = ENV["OVERTOURE_MAPS_API_KEY"]
-  config.base_url = ENV["OVERTOURE_MAPS_BASE_URL"] if ENV["OVERTOURE_MAPS_BASE_URL"]
-end
+# Example: Configure timeout (default is 30 seconds)
+# OvertureMaps.configure do |config|
+#   config.timeout = 60
+# end

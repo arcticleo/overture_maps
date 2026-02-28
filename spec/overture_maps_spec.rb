@@ -4,34 +4,20 @@ RSpec.describe OvertureMaps do
   describe ".configure" do
     it "yields configuration object" do
       OvertureMaps.configure do |config|
-        config.api_key = "test-key"
+        config.timeout = 60
       end
 
-      expect(OvertureMaps.api_key).to eq("test-key")
-    end
-  end
-
-  describe ".client" do
-    it "returns a Client instance" do
-      expect(OvertureMaps.client).to be_a(OvertureMaps::Client)
-    end
-
-    it "memoizes the client" do
-      client1 = OvertureMaps.client
-      client2 = OvertureMaps.client
-
-      expect(client1).to equal(client2)
+      expect(OvertureMaps.configuration.timeout).to eq(60)
     end
   end
 
   describe ".reset" do
-    it "clears configuration and client" do
-      OvertureMaps.configure { |c| c.api_key = "test-key" }
-      OvertureMaps.client
+    it "clears configuration" do
+      OvertureMaps.configure { |c| c.timeout = 60 }
 
       OvertureMaps.reset
 
-      expect(OvertureMaps.api_key).to be_nil
+      expect(OvertureMaps.configuration.timeout).to eq(30)
     end
   end
 end

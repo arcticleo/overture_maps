@@ -1,10 +1,9 @@
 # Overture Maps Ruby Gem
 
-A Ruby gem for integrating with [Overture Maps](https://overturemaps.org/) - an open map data foundation providing geospatial data. Query the API directly or import Parquet data files into your Rails application.
+A Ruby gem for integrating with [Overture Maps](https://overturemaps.org/) - an open map data foundation providing geospatial data. Import Parquet data files into your Rails application.
 
 ## Features
 
-- **Direct API Access**: Query Overture Maps API for buildings, places, brands, and categories
 - **Data Import**: Import Parquet data files into your PostgreSQL/PostGIS database
 - **Rails Integration**: Model generators, rake tasks, and PostGIS utilities
 - **RGeo Support**: Full geometry support for geospatial queries
@@ -35,28 +34,7 @@ For S3 cloud storage support (optional):
 gem install aws-sdk-s3
 ```
 
-## Configuration
-
-### API Key
-
-Get your API key from [overturemapsapi.com](https://overturemapsapi.com).
-
-Configure in an initializer:
-
-```ruby
-# config/initializers/overture_maps.rb
-OvertureMaps.configure do |config|
-  config.api_key = ENV["OVERTOURE_MAPS_API_KEY"]
-end
-```
-
-Or set it directly:
-
-```ruby
-OvertureMaps.api_key = "your-api-key"
-```
-
-### Database Setup
+## Database Setup
 
 This gem requires PostgreSQL with PostGIS extension.
 
@@ -75,63 +53,6 @@ class EnablePostgis < ActiveRecord::Migration[8.0]
     enable_extension "postgis"
   end
 end
-```
-
-## Usage
-
-### API Client
-
-Query the Overture Maps API directly:
-
-```ruby
-# Initialize the client
-client = OvertureMaps.client
-
-# Query places near a location
-places = client.places(
-  lat: 40.7128,
-  lng: -74.006,
-  radius: 1000,
-  categories: "cafes"
-)
-
-# Query all places in a country
-places = client.places(
-  country: "JP",
-  categories: "restaurants",
-  limit: 10
-)
-
-# Query buildings near a location
-buildings = client.buildings(
-  lat: 40.7128,
-  lng: -74.006,
-  radius: 500
-)
-
-# Get brands by country
-brands = client.brands(country: "US")
-
-# Get all countries with place counts
-countries = client.countries
-
-# Get all categories
-categories = client.categories
-```
-
-### Response Formats
-
-All methods support a `format` parameter:
-
-```ruby
-# JSON (default)
-places = client.places(lat: 40.7128, lng: -74.006, format: "json")
-
-# GeoJSON
-places = client.places(lat: 40.7128, lng: -74.006, format: "geojson")
-
-# CSV
-places = client.places(lat: 40.7128, lng: -74.006, format: "csv")
 ```
 
 ## Model Generators
@@ -432,20 +353,7 @@ OvertureMaps::Database.nearest_neighbors(
 )
 ```
 
-## API Reference
-
-### Client Methods
-
-| Method | Description |
-|--------|-------------|
-| `client.places(lat:, lng:, radius:, categories:, brand_name:, country:, limit:, format:)` | Query places |
-| `client.buildings(lat:, lng:, radius:, limit:, format:)` | Query buildings |
-| `client.places_with_buildings(lat:, lng:, radius:, categories:, brand_name:, country:, limit:, format:)` | Query places with buildings |
-| `client.brands(country:, limit:)` | List brands |
-| `client.countries` | List countries with counts |
-| `client.categories` | List all categories |
-
-### Model Scopes
+## Model Scopes
 
 | Model | Scope | Description |
 |-------|-------|-------------|
@@ -467,7 +375,6 @@ OvertureMaps::Database.nearest_neighbors(
 - Ruby >= 3.0
 - Rails >= 7.0
 - PostgreSQL with PostGIS extension
-- Faraday (HTTP client, included)
 - RGeo (geospatial, included)
 - Parquet gem (for Parquet file support)
 
@@ -486,5 +393,4 @@ MIT License - see LICENSE.txt
 ## Links
 
 - [Overture Maps](https://overturemaps.org/)
-- [Overture Maps API](https://overturemapsapi.com)
 - [Overture Maps Documentation](https://docs.overturemaps.org/)

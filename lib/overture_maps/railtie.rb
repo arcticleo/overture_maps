@@ -4,8 +4,7 @@ module OvertureMaps
   class Railtie < Rails::Railtie
     initializer "overture_maps.configure" do |app|
       OvertureMaps.configure do |config|
-        config.api_key = app.config.overture_maps&.api_key
-        config.base_url = app.config.overture_maps&.base_url || "https://api.overturemapsapi.com"
+        config.timeout = app.config.overture_maps&.timeout || 30
       end
     end
   end

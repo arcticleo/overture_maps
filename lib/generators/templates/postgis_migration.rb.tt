@@ -1,0 +1,5 @@
+class EnablePostgis < ActiveRecord::Migration[<%= migration_version %>]
+  def change
+    enable_extension "postgis"
+  end
+end

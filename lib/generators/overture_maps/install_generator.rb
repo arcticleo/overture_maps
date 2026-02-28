@@ -8,6 +8,12 @@ module OvertureMaps
       def create_migrations
         puts "Creating Overture Maps migrations..."
 
+        # Create PostGIS extension migration first
+        migration_template(
+          "postgis_migration.rb.tt",
+          "db/migrate/create_overture_postgis.rb"
+        )
+
         # Create all migrations
         migration_template(
           "place_migration.rb.tt",

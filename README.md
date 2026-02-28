@@ -34,42 +34,30 @@ For S3 cloud storage support (optional):
 gem install aws-sdk-s3
 ```
 
-## Database Setup
+## Getting Started
 
-This gem requires PostgreSQL with PostGIS extension.
+### Install the Gem
 
-Create a new Rails application with PostGIS:
+Add to your Gemfile and run `bundle install`.
 
-```bash
-rails new my_app -d postgresql
-```
-
-Enable the PostGIS extension:
-
-```ruby
-# db/migrate/xxxx_enable_postgis.rb
-class EnablePostgis < ActiveRecord::Migration[8.0]
-  def change
-    enable_extension "postgis"
-  end
-end
-```
-
-## Model Generators
-
-Generate Rails models and migrations for Overture data:
-
-### Install All Models
+### Generate Models and Migrations
 
 ```bash
 rails generate overture_maps:install
 ```
 
 This creates:
+- Migration to enable the PostGIS extension
 - Migration for `overture_places` table
 - Migration for `overture_buildings` table
 - Migration for `overture_addresses` table
 - Model files
+
+Then run migrations:
+
+```bash
+rails db:migrate
+```
 
 ### Generate Individual Models
 
@@ -82,12 +70,6 @@ rails generate overture_maps:building
 
 # Generate Address model
 rails generate overture_maps:address
-```
-
-### Run Migrations
-
-```bash
-rails db:migrate
 ```
 
 ## Data Import

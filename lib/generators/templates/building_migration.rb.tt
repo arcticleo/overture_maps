@@ -1,4 +1,4 @@
-class CreateOvertureBuildings < ActiveRecord::Migration[<%= migration_version %>]
+class CreateOvertureBuildings < ActiveRecord::Migration[8.0]
   def change
     create_table :overture_buildings, id: :string, primary_key: :id do |t|
       t.string :names, array: true, default: []

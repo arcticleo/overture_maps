@@ -1,4 +1,4 @@
-class CreateOvertureCategories < ActiveRecord::Migration[<%= migration_version %>]
+class CreateOvertureCategories < ActiveRecord::Migration[8.0]
   def change
     create_table :overture_categories do |t|
       t.string :name, null: false

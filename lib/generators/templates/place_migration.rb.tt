@@ -1,3 +1,6 @@
+# frozen_string_literal: true
+require "rgeo/active_record"
+
 class CreateOverturePlaces < ActiveRecord::Migration[8.0]
   def change
     create_table :overture_places, id: :string, primary_key: :id do |t|

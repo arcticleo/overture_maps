@@ -1,6 +1,7 @@
 # frozen_string_literal: true
-# Ensure rgeo is loaded for spatial column types
+# Ensure postgis adapter is loaded for spatial column types
 require "rgeo/active_record"
+require "activerecord-postgis-adapter"
 
 class CreateOvertureAddresses < ActiveRecord::Migration[8.0]
   def change
@@ -10,11 +11,13 @@ class CreateOvertureAddresses < ActiveRecord::Migration[8.0]
       t.string :region
       t.string :country
       t.string :postcode
-      t.geometry :geometry, geographic: true
       t.timestamps
     end
 
+    # Add geometry column using add_column (outside create_table)
+    add_column :overture_addresses, :geometry, :geometry, geographic: true, srid: 4326
     add_index :overture_addresses, :geometry, using: :gist
+
     add_index :overture_addresses, :country
     add_index :overture_addresses, :locality
     add_index :overture_addresses, :postcode

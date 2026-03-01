@@ -20,6 +20,7 @@ Gem::Specification.new do |spec|
   spec.add_dependency "rails", ">= 7.0"
   spec.add_dependency "rgeo", "~> 3.0"
   spec.add_dependency "rgeo-activerecord", "~> 8.0"
+  spec.add_dependency "activerecord-postgis-adapter", "~> 8.0"
   spec.add_dependency "parquet", "~> 0.0" # Apache Parquet Ruby bindings
   spec.add_dependency "aws-sdk-s3", "~> 1.0" # For S3 access
 

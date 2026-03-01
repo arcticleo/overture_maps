@@ -3,7 +3,7 @@
 module OvertureMaps
   module Generators
     class InstallGenerator < ::Rails::Generators::Base
-      source_root File.expand_path("templates", __dir__)
+      source_root File.expand_path("../templates", __dir__)
 
       def create_migrations
         puts "Creating Overture Maps migrations..."

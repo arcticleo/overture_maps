@@ -1,8 +1,13 @@
 # frozen_string_literal: true
 
+require "rails/generators/base"
+require "rails/generators/migration"
+
 module OvertureMaps
   module Generators
-    class InstallGenerator < ::Rails::Generators::Base
+    class InstallGenerator < Rails::Generators::Base
+      include Rails::Generators::Migration
+
       source_root File.expand_path("../templates", __dir__)
 
       def create_migrations

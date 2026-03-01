@@ -1,4 +1,5 @@
 # frozen_string_literal: true
+# Ensure rgeo is loaded for spatial column types
 require "rgeo/active_record"
 
 class CreateOvertureAddresses < ActiveRecord::Migration[8.0]
@@ -10,7 +11,6 @@ class CreateOvertureAddresses < ActiveRecord::Migration[8.0]
       t.string :country
       t.string :postcode
       t.geometry :geometry, geographic: true
-
       t.timestamps
     end
 

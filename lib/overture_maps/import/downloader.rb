@@ -15,6 +15,7 @@ module OvertureMaps
         "transportation" => %w[connector segment]
       }.freeze
 
+      DUCKDB_VERSION = "1.1.0"
       S3_BUCKET = "overturemaps-us-west-2"
       S3_REGION = "us-west-2"
       AZURE_ACCOUNT = "overturemapswestus2"
@@ -131,22 +132,13 @@ module OvertureMaps
       # Download data for a geographic bounding box using DuckDB
       # This is more efficient than downloading all files as it filters server-side
       def download_from_s3_with_bbox(lat1:, lng1:, lat2:, lng2:, format: "parquet")
-        require "duckdb"
+        ensure_duckdb_cli!
 
         # Normalize coordinates (handle cases where user passes corners in any order)
         min_lat = [lat1, lat2].min
         max_lat = [lat1, lat2].max
         min_lng = [lng1, lng2].min
         max_lng = [lng1, lng2].max
-
-        db = DuckDB::Database.new
-        conn = db.connect
-
-        # Install extensions
-        conn.execute("INSTALL spatial;")
-        conn.execute("INSTALL httpfs;")
-        conn.execute("LOAD spatial;")
-        conn.execute("SET s3_region='us-west-2';")
 
         # Build the query
         types_to_query = type ? [type] : TYPES[theme] || []
@@ -161,7 +153,7 @@ module OvertureMaps
           local_path = File.join(output_dir, filename)
 
           puts "  Exporting to #{filename}..."
-          copy_result = conn.execute("COPY (#{query}) TO '#{local_path}' WITH (FORMAT GDAL, DRIVER '#{gdal_driver(format)}');")
+          run_duckdb_query(query, local_path, format)
 
           if File.exist?(local_path) && File.size(local_path) > 0
             output_files << local_path
@@ -171,15 +163,9 @@ module OvertureMaps
           end
         end
 
-        db.close
-
         puts
         puts "Download complete!"
         output_files.count
-      rescue LoadError
-        raise Error, "DuckDB not installed. Run: gem install duckdb"
-      rescue DuckDB::Error => e
-        raise Error, "DuckDB query failed: #{e.message}"
       end
 
       # Download data for a center point and radius using DuckDB
@@ -281,28 +267,21 @@ module OvertureMaps
 
       # Search for divisions by name
       def self.search_divisions(query:, version: nil)
-        require "duckdb"
+        ensure_duckdb_cli!
 
         v = version || latest_version
 
-        db = DuckDB::Database.new
-        conn = db.connect
-
-        conn.execute("INSTALL spatial;")
-        conn.execute("INSTALL httpfs;")
-        conn.execute("LOAD spatial;")
-        conn.execute("SET s3_region='us-west-2';")
-
         sql = <<~SQL
+          INSTALL spatial;
+          LOAD spatial;
+          SET s3_region='us-west-2';
           SELECT id, names, subtype, bbox
           FROM read_parquet('s3://overturemaps-us-west-2/release/#{v}/theme=divisions/type=division/*.parquet')
           WHERE names.primary ILIKE '%#{query}%'
           LIMIT 20
         SQL
 
-        results = conn.execute(sql).to_a
-        db.close
-
+        results = run_duckdb_sql(sql)
         results.map do |row|
           names = row["names"]
           name = names.is_a?(Hash) ? names["primary"] : nil
@@ -313,34 +292,25 @@ module OvertureMaps
             bbox: row["bbox"]
           }
         end
-      rescue LoadError
-        raise Error, "DuckDB not installed. Run: gem install duckdb"
-      rescue DuckDB::Error => e
-        raise Error, "DuckDB query failed: #{e.message}"
       end
 
       # Get bbox from a division ID
       def self.get_division_bbox(division_id:, version: nil)
-        require "duckdb"
+        ensure_duckdb_cli!
 
         v = version || latest_version
 
-        db = DuckDB::Database.new
-        conn = db.connect
-
-        conn.execute("INSTALL spatial;")
-        conn.execute("INSTALL httpfs;")
-        conn.execute("LOAD spatial;")
-        conn.execute("SET s3_region='us-west-2';")
-
         # First try division type
         sql = <<~SQL
+          INSTALL spatial;
+          LOAD spatial;
+          SET s3_region='us-west-2';
           SELECT bbox FROM read_parquet('s3://overturemaps-us-west-2/release/#{v}/theme=divisions/type=division/*.parquet')
           WHERE id = '#{division_id}'
           LIMIT 1
         SQL
 
-        result = conn.execute(sql).to_a.first
+        result = run_duckdb_sql(sql).first
 
         # If not found, try division_area
         if result.nil?
@@ -349,16 +319,68 @@ module OvertureMaps
             WHERE id = '#{division_id}'
             LIMIT 1
           SQL
-          result = conn.execute(sql).to_a.first
+          result = run_duckdb_sql(sql).first
         end
 
-        db.close
-
         result&.fetch("bbox")
-      rescue LoadError
-        raise Error, "DuckDB not installed. Run: gem install duckdb"
-      rescue DuckDB::Error => e
-        raise Error, "DuckDB query failed: #{e.message}"
+      end
+
+      # Ensure DuckDB CLI is available, download if needed
+      def self.ensure_duckdb_cli!
+        return if duckdb_cli_path
+
+        puts "Downloading DuckDB CLI..."
+        arch = RUBY_PLATFORM =~ /darwin/ ? "duckdb_cli-osx-universal" : "duckdb_cli-linux-amd64"
+        url = "https://github.com/duckdb/duckdb/releases/download/v#{DUCKDB_VERSION}/#{arch}.zip"
+
+        zip_path = "/tmp/duckdb.zip"
+        File.binwrite(zip_path, Net::HTTP.get(URI(url)))
+        system("unzip -o -j #{zip_path} -d /tmp/duckdb/ 2>/dev/null && chmod +x /tmp/duckdb/duckdb")
+        File.delete(zip_path) if File.exist?(zip_path)
+
+        raise "Failed to download DuckDB CLI" unless duckdb_cli_path && File.executable?(duckdb_cli_path)
+      end
+
+      def self.duckdb_cli_path
+        return @duckdb_path if @duckdb_path && File.executable?(@duckdb_path)
+
+        # Check common locations
+        paths = ["/tmp/duckdb/duckdb", "duckdb"]
+        paths += `which duckdb 2>/dev/null`.split if `which duckdb 2>/dev/null`.present?
+
+        @duckdb_path = paths.find { |p| File.executable?(p) }
+      end
+
+      # Run a DuckDB query that exports to a file
+      def run_duckdb_query(query, output_path, format)
+        driver = gdal_driver(format)
+        sql = <<~SQL
+          INSTALL spatial;
+          LOAD spatial;
+          SET s3_region='us-west-2';
+          COPY (#{query}) TO '#{output_path}' WITH (FORMAT GDAL, DRIVER '#{driver}');
+        SQL
+
+        escaped_sql = sql.gsub("'", "'\\''")
+        result = `echo '#{escaped_sql}' | #{self.class.duckdb_cli_path} 2>&1`
+        raise "DuckDB error: #{result}" if $?.exitstatus != 0
+      end
+
+      def self.run_duckdb_sql(sql, output_path: nil)
+        require "json"
+
+        # Escape SQL for shell
+        escaped_sql = sql.gsub("'", "'\\''")
+
+        # Run query and output as JSON
+        cmd = "echo '#{escaped_sql}' | #{duckdb_cli_path} -json 2>&1"
+        output = `#{cmd}`
+
+        raise "DuckDB error: #{output}" if $?.exitstatus != 0
+
+        # Parse JSON output
+        lines = output.lines.map(&:strip).reject(&:empty?)
+        lines.map { |line| JSON.parse(line) }
       end
 
       # Download data for a division (uses DuckDB to get bbox from division shape)

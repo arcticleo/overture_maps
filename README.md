@@ -22,16 +22,22 @@ Then run:
 bundle install
 ```
 
-For Parquet file support, also install the parquet gem:
+### Build Dependencies
+
+The parquet and aws-sdk-s3 gems require native extensions:
 
 ```bash
-gem install parquet
+sudo apt-get install -y cmake build-essential
+bundle install
 ```
 
-For S3 cloud storage support (optional):
-
+**Optional: DuckDB** - For bbox/division filtering features:
 ```bash
-gem install aws-sdk-s3
+# Ubuntu 22.04
+sudo apt-get install -y libduckdb-dev
+gem install duckdb -v 0.10.0
+
+# Or build from source if needed
 ```
 
 ## Getting Started

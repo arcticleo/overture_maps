@@ -31,14 +31,7 @@ sudo apt-get install -y cmake build-essential
 bundle install
 ```
 
-**Optional: DuckDB** - For bbox/division filtering features:
-```bash
-# Ubuntu 22.04
-sudo apt-get install -y libduckdb-dev
-gem install duckdb -v 0.10.0
-
-# Or build from source if needed
-```
+The gem automatically downloads the DuckDB CLI binary when needed for bbox/division filtering.
 
 ## Getting Started
 

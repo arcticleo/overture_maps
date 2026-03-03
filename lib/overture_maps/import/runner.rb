@@ -120,27 +120,53 @@ module OvertureMaps
 
       # Convert Parquet record to model attributes
       def record_to_attributes(record)
-        {
+        attrs = {
           id: record["id"],
           geometry: parse_geometry(record["geometry"]),
-          names: record["names"],
-          categories: record["categories"],
-          brands: record["brands"],
-          addresses: record["addresses"],
-          confidence: record["confidence"],
-          elevation: record["elevation"],
-          country: record["country"],
-          height: record["height"],
-          level: record["level"],
-          is_underground: record["is_underground"],
-          street: record["street"],
-          locality: record["locality"],
-          region: record["region"],
-          postcode: record["postcode"],
-          class: record["class"],
           created_at: Time.current,
           updated_at: Time.current
-        }.compact
+        }
+
+        # Extract names array from struct {primary: "...", common: {...}, rules: [...]}
+        if record["names"]
+          names = []
+          names << record["names"]["primary"] if record["names"]["primary"]
+          if record["names"]["common"].is_a?(Hash)
+            names.concat(record["names"]["common"].values)
+          end
+          attrs[:names] = names
+        end
+
+        # Categories: store the struct as JSONB
+        attrs[:categories] = record["categories"] if record["categories"]
+
+        # Brand: field is "brand" (singular) in Overture data, "brands" in DB
+        attrs[:brands] = record["brand"] if record["brand"]
+
+        # Addresses: store the list of address structs as JSONB
+        attrs[:addresses] = record["addresses"] if record["addresses"]
+
+        # Extract country from first address if available
+        if record["addresses"].is_a?(Array) && record["addresses"].first
+          attrs[:country] = record["addresses"].first["country"]
+        end
+
+        # Numeric/string fields
+        attrs[:confidence] = record["confidence"]&.to_s
+        attrs[:elevation] = record["elevation"]
+
+        # Building fields
+        attrs[:height] = record["height"]
+        attrs[:level] = record["level"]
+        attrs[:is_underground] = record["is_underground"]
+
+        # Address fields (for address theme)
+        attrs[:street] = record["street"]
+        attrs[:locality] = record["locality"]
+        attrs[:region] = record["region"]
+        attrs[:postcode] = record["postcode"]
+
+        attrs.compact
       end
 
       # Parse geometry from WKB or GeoJSON

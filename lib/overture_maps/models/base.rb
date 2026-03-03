@@ -10,7 +10,7 @@ module OvertureMaps
       # Scope: within bounding box
       scope :within_bounds, ->(south, west, north, east) {
         where(
-          "ST_X(geometry) BETWEEN ? AND ? AND ST_Y(geometry) BETWEEN ? AND ?",
+          "ST_X(geometry::geometry) BETWEEN ? AND ? AND ST_Y(geometry::geometry) BETWEEN ? AND ?",
           west, east, south, north
         )
       }
@@ -18,7 +18,7 @@ module OvertureMaps
       # Scope: near a point (radial query)
       scope :near, ->(lat, lng, radius_meters = 1000) {
         where(
-          "ST_DWithin(geometry, ST_Point(?, ?)::geography, ?)",
+          "ST_DWithin(geometry, ST_SetSRID(ST_MakePoint(?, ?), 4326)::geography, ?)",
           lng, lat, radius_meters
         )
       }

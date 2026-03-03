@@ -19,13 +19,10 @@ Gem::Specification.new do |spec|
   # Dependencies
   spec.add_dependency "rails", ">= 7.0"
   spec.add_dependency "rgeo", "~> 3.0"
-  spec.add_dependency "rgeo-activerecord", "~> 8.0"
-  spec.add_dependency "activerecord-postgis-adapter", "~> 8.0"
-  spec.add_dependency "parquet", "~> 0.0" # Apache Parquet Ruby bindings
-  spec.add_dependency "aws-sdk-s3", "~> 1.0" # For S3 access
-
-  # Optional dependencies
-  # spec.add_dependency "azure-storage-blob", "~> 12.0" # For Azure Blob access
+  spec.add_dependency "rgeo-activerecord"
+  spec.add_dependency "activerecord-postgis-adapter"
+  spec.add_dependency "parquet", "~> 0.0"
+  spec.add_dependency "aws-sdk-s3", "~> 1.0"
 
   # Development dependencies
   spec.add_development_dependency "rspec", "~> 3.12"

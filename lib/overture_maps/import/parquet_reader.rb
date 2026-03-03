@@ -35,35 +35,18 @@ module OvertureMaps
         end
       end
 
-      # Read Parquet file from local path
-      def read_from_file(path)
-        Parquet::ArrowReader.new(path)
-      end
-
       # Iterate over records in the Parquet file
-      def each_record(source:)
-        case source
-        when String
-          reader = Parquet::ArrowReader.new(source)
-        else
-          raise ArgumentError, "Source must be a file path"
-        end
+      def each_record(source:, &block)
+        raise ArgumentError, "Source must be a file path" unless source.is_a?(String)
 
-        reader.each_record do |record|
-          yield record.to_h
-        end
+        Parquet.each_row(source, &block)
       end
 
       # Get record count without loading all data
       def record_count(source:)
-        case source
-        when String
-          reader = Parquet::ArrowReader.new(source)
-        else
-          raise ArgumentError, "Source must be a file path"
-        end
+        raise ArgumentError, "Source must be a file path" unless source.is_a?(String)
 
-        reader.num_rows
+        Parquet.metadata(source)["num_rows"]
       end
 
       # List available regions for a theme (requires AWS SDK)

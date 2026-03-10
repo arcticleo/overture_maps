@@ -100,7 +100,7 @@ module OvertureMaps
 
       # Query S3 directly using DuckDB with spatial filtering
       # Returns records as an array of hashes
-      def self.query_s3_with_bbox(theme:, type:, min_lat:, max_lat:, min_lng:, max_lng, version: nil)
+      def self.query_s3_with_bbox(theme:, type:, min_lat:, max_lat:, min_lng:, max_lng:, version: nil)
         require "tempfile"
         require "open3"
         require "json"
@@ -141,7 +141,7 @@ module OvertureMaps
 
       # Stream records from S3 with spatial filtering using DuckDB
       # Yields each record for memory-efficient processing
-      def self.stream_s3_with_bbox(theme:, type:, min_lat:, max_lat:, min_lng:, max_lng, version: nil, &block)
+      def self.stream_s3_with_bbox(theme:, type:, min_lat:, max_lat:, min_lng:, max_lng:, version: nil, &block)
         records = query_s3_with_bbox(
           theme: theme,
           type: type,

@@ -248,7 +248,7 @@ end
 namespace :overture_maps do
   namespace :import do
     desc "Import places from Overture Maps (by location name or bounding box)"
-    task :places, [:location, :version, :categories] => :environment do |_t, args|
+    task :places, [:location, :categories] => :environment do |_t, args|
       location = args[:location]
       categories = args[:categories]&.split(",")&.map(&:strip)
 
@@ -333,7 +333,7 @@ namespace :overture_maps do
     end
 
     desc "Import buildings from Overture Maps (by location name or bounding box)"
-    task :buildings, [:location, :version] => :environment do |_t, args|
+    task :buildings, [:location] => :environment do |_t, args|
       location = args[:location]
 
       model_class = require_model("OvertureBuilding")
@@ -399,7 +399,7 @@ namespace :overture_maps do
     end
 
     desc "Import addresses from Overture Maps (by location name or bounding box)"
-    task :addresses, [:location, :version] => :environment do |_t, args|
+    task :addresses, [:location] => :environment do |_t, args|
       location = args[:location]
 
       model_class = require_model("OvertureAddress")

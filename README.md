@@ -132,10 +132,10 @@ rails overture_maps:import:buildings[47.606,-122.336,47.609,-122.333]
 
 ```bash
 # Import only food & drink establishments
-rails overture_maps:import:places[Seattle,,eat_and_drink]
+rails overture_maps:import:places[Seattle,eat_and_drink]
 
-# Import cafes and hotels specifically
-rails overture_maps:import:places[Seattle,,cafes,hotels]
+# Import multiple categories
+rails overture_maps:import:places[Seattle,"eat_and_drink,shopping"]
 
 # See available primary categories
 rails overture_maps:categories:primary

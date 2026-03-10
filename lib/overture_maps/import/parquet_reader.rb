@@ -73,6 +73,87 @@ module OvertureMaps
       rescue LoadError
         raise Error, "AWS SDK not installed. Run: gem install aws-sdk-s3"
       end
+
+      # Check if a local file exists for a theme + location combination
+      # @param theme [String] The theme name (e.g., "places", "buildings")
+      # @param location [String, nil] The location name (e.g., "Seattle", "California") or nil for any
+      # @param output_dir [String] Directory to search (default: tmp/overture)
+      # @return [String, nil] Path to the matching file, or nil if not found
+      def self.find_local_file(theme:, location: nil, output_dir: "tmp/overture")
+        return nil unless Dir.exist?(output_dir)
+
+        pattern = File.join(output_dir, "#{theme}_*.parquet")
+        files = Dir.glob(pattern)
+
+        if location
+          # Try to find a file matching the location name
+          normalized_location = location.to_s.downcase.gsub(/\s+/, "_")
+
+          # First try exact match
+          exact_match = files.find { |f| f.downcase.include?(normalized_location) }
+          return exact_match if exact_match
+        end
+
+        # Return the most recently modified file if any exist
+        files.sort_by { |f| File.mtime(f) }.last
+      end
+
+      # Query S3 directly using DuckDB with spatial filtering
+      # Returns records as an array of hashes
+      def self.query_s3_with_bbox(theme:, type:, min_lat:, max_lat:, min_lng:, max_lng, version: nil)
+        require "tempfile"
+        require "open3"
+        require "json"
+
+        Downloader.ensure_duckdb_cli!
+
+        columns = case theme
+        when "places"
+          "*"
+        when "buildings"
+          "id, names, height, level, class, is_underground, geometry"
+        when "addresses"
+          "*"
+        when "divisions"
+          "*"
+        when "base"
+          "*"
+        when "transportation"
+          "*"
+        else
+          "*"
+        end
+
+        sql = <<~SQL.squish
+          INSTALL spatial;
+          LOAD spatial;
+          SET s3_region='us-west-2';
+          SELECT #{columns}
+          FROM read_parquet('s3://overturemaps-us-west-2/release/**/theme=#{theme}/type=#{type}/*', union_by_name=true)
+          WHERE bbox.xmin > #{min_lng}
+            AND bbox.xmax < #{max_lng}
+            AND bbox.ymin > #{min_lat}
+            AND bbox.ymax < #{max_lat}
+        SQL
+
+        Downloader.run_duckdb_sql(sql)
+      end
+
+      # Stream records from S3 with spatial filtering using DuckDB
+      # Yields each record for memory-efficient processing
+      def self.stream_s3_with_bbox(theme:, type:, min_lat:, max_lat:, min_lng:, max_lng, version: nil, &block)
+        records = query_s3_with_bbox(
+          theme: theme,
+          type: type,
+          min_lat: min_lat,
+          max_lat: max_lat,
+          min_lng: min_lng,
+          max_lng: max_lng,
+          version: version
+        )
+
+        records.each(&block)
+      end
     end
   end
 end

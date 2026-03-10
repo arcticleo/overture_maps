@@ -90,67 +90,124 @@ rails generate overture_maps:building
 rails generate overture_maps:address
 ```
 
-## Data Import
+## Importing Data
 
-### Download Parquet Files
+Import Overture Maps data directly into your Rails application's database.
 
-Download Parquet files directly from S3 or Azure without needing to use the AWS/Azure CLI:
+### Quick Start
+
+Import data for any city, state, or country by name:
 
 ```bash
-# Download all places data (global)
-rails overture_maps:download:places
-
-# Download places (specific type - default is "place")
-rails overture_maps:download:places[place]
-
-# Download a specific version
-rails overture_maps:download:places[place,2025-01-17]
-
-# Download to custom directory
-rails overture_maps:download:places[place,,/custom/path]
-
-# Download buildings (includes "building" and "building_part" types)
-rails overture_maps:download:buildings
-rails overture_maps:download:buildings[building]
-rails overture_maps:download:buildings[building_part]
-
-# Download addresses
-rails overture_maps:download:addresses
-
-# Download base data (land, water, land_use, etc.)
-rails overture_maps:download:base
-rails overture_maps:download:base[land]
-
-# Download divisions (countries, states, etc.)
-rails overture_maps:download:divisions
-
-# Download transportation (roads, etc.)
-rails overture_maps:download:transportation
-
-# Download all themes
-rails overture_maps:download:all
-
-# Download all themes for a location (uses location name, not coordinates)
-rails overture_maps:download:all[Seattle]
-rails "overture_maps:download:all[New York]"
-
-# Note: For bounding box with :all, use underscores as separators:
-rails overture_maps:download:all[47.606_-122.336_47.609_-122.333]
-
-# Or use location names (commas work for individual tasks only):
-rails overture_maps:download:places[47.606,-122.336,47.609,-122.333]
-rails overture_maps:download:places[47.606_-122.336_47.609_-122.333]
-
-# Download from Azure instead of S3
-rails overture_maps:download:azure:places
+rails overture_maps:import:places[Seattle]
 ```
 
-**Download by Location Name:**
+That's it! The gem will:
+1. Search for divisions matching "Seattle"
+2. Prompt you to select if multiple matches exist
+3. Stream data directly from S3 into your database with spatial filtering
+
+### Import by Location Name
 
 ```bash
-# Download places for a city (shows list if ambiguous)
+# Import places for a city, state, or country
+rails overture_maps:import:places[Seattle]
+rails overture_maps:import:places[California]
+rails overture_maps:import:places[Germany]
+
+# For names with spaces, use quotes or escape the space
+rails "overture_maps:import:places[New York]"
+rails overture_maps:import:places[New\ York]
+```
+
+### Import by Bounding Box
+
+```bash
+# Import within a geographic bounding box (lat1,lng1,lat2,lng2)
+rails overture_maps:import:places[47.606,-122.336,47.609,-122.333]
+rails overture_maps:import:buildings[47.606,-122.336,47.609,-122.333]
+```
+
+### Import with Category Filtering
+
+```bash
+# Import only food & drink establishments
+rails overture_maps:import:places[Seattle,,eat_and_drink]
+
+# Import cafes and hotels specifically
+rails overture_maps:import:places[Seattle,,cafes,hotels]
+
+# See available primary categories
+rails overture_maps:categories:primary
+```
+
+### Import Buildings and Addresses
+
+```bash
+rails overture_maps:import:buildings[Seattle]
+rails overture_maps:import:addresses[Seattle]
+```
+
+### Import All Themes
+
+```bash
+# Import all themes for a location
+rails overture_maps:import:all[Seattle]
+
+# Import all themes using bounding box (use underscores)
+rails overture_maps:import:all[47.606_-122.336_47.609_-122.333]
+```
+
+### How Import Works
+
+When you run an import task:
+
+1. **Search**: The gem searches for geographic divisions matching your location name
+2. **Select**: If multiple matches are found, you'll be prompted to select the correct one
+3. **Local File Check**: If a previously downloaded file exists for this location, you'll be asked:
+   - `y` - Import from local file (faster)
+   - `n` - Cancel
+   - `download` - Download fresh data from S3 (may be newer)
+4. **S3 Import**: If no local file exists, data is streamed directly from S3 with spatial filtering using DuckDB
+
+### Search Divisions First
+
+Not sure of the exact name? Search first:
+
+```bash
+rails overture_maps:import:search[Seattle]
+
+# Then import using the exact name from the results
+rails overture_maps:import:places[Seattle]
+```
+
+### Check Import Statistics
+
+```bash
+rails overture_maps:import:stats
+```
+
+### List Available Versions
+
+```bash
+rails overture_maps:import:versions
+```
+
+---
+
+## Downloading Data (Optional)
+
+**Download is optional.** Import tasks stream data directly from S3 by default. Use download tasks when you want to:
+
+- Keep raw Parquet files locally for offline use
+- Re-import the same data multiple times without re-downloading
+- Work with the data outside of Rails (e.g., in QGIS, pandas, etc.)
+
+### Download by Location Name
+
+```bash
+# Download places for a city
 rails overture_maps:download:places[Seattle]
-rails overture_maps:download:places[Stockholm]
 
 # Download buildings for a geographic area
 rails overture_maps:download:buildings[California]
@@ -158,14 +215,53 @@ rails overture_maps:download:buildings[California]
 # Download addresses for a country
 rails overture_maps:download:addresses[Germany]
 
-# For names with spaces, use quotes or escape the space
+# For names with spaces
 rails "overture_maps:download:places[New York]"
-rails overture_maps:download:places[New\ York]
-rails "overture_maps:download:buildings[San Francisco]"
 ```
 
+### Download by Bounding Box
+
+```bash
+# Download places within a bounding box
+rails overture_maps:download:bbox[places,49.5,-125,47,-121]
+
+# Download near a center point (lat, lng, radius in meters)
+rails overture_maps:download:nearby[places,40.7128,-74.006,10000]
+```
+
+### Download Complete Theme Files
+
+```bash
+# Download all places data files (global - large!)
+rails overture_maps:download:places
+
+# Download specific theme files
+rails overture_maps:download:buildings
+rails overture_maps:download:addresses
+rails overture_maps:download:transportation
+
+# Download from Azure instead of S3
+rails overture_maps:download:azure:places
+```
+
+### Using Downloaded Files
+
+Once you've downloaded data, the import task will automatically detect it:
+
+```bash
+# Download once
+rails overture_maps:download:places[Seattle]
+
+# Import will prompt to use the local file
+rails overture_maps:import:places[Seattle]
+# → Found local file: tmp/overture/places_seattle.parquet (15.8 MB)
+# → Import from this file? (y/n/download)
+```
+
+### Download Options
+
 **Options:**
-- `type` - Feature type within the theme (e.g., `place`, `building`, `land`). Defaults to first type in theme.
+- `type` - Feature type within the theme (e.g., `place`, `building`, `land`)
 - `version` - Data version (e.g., `2025-01-17`). Defaults to latest available.
 - `output_dir` - Directory to save files. Defaults to `tmp/overture`.
 
@@ -181,57 +277,9 @@ rails overture_maps:download:versions
 # List types available for a theme
 rails overture_maps:download:types[buildings]
 
-# List files without downloading (shows S3/Azure paths)
+# List files without downloading
 rails overture_maps:download:list[places]
-rails overture_maps:download:list[buildings,building]
 ```
-
-### Download by Geographic Area
-
-Download data for a specific area using DuckDB for server-side filtering (much faster than downloading all files):
-
-```bash
-# Download places within a bounding box
-# Arguments: theme, lat1, lng1, lat2, lng2
-# lat1,lng1 = top-left corner, lat2,lng2 = bottom-right corner
-rails overture_maps:download:bbox[places,49.5,-125,47,-121]
-
-# Download buildings within bounding box
-rails overture_maps:download:bbox[buildings,40.6,-74.1,40.8,-73.9]
-
-# Download near a center point (lat, lng, radius in meters)
-rails overture_maps:download:nearby[places,40.7128,-74.006,10000]
-
-# Download with custom type, version, and output directory
-rails overture_maps:download:bbox[buildings,40.6,-74.1,40.8,-73.9,building,2025-01-17,/custom/path]
-```
-
-**Note:** The bbox and nearby tasks use DuckDB to query S3 directly with spatial filtering, which is much more efficient than downloading all files. Requires the `duckdb` gem.
-
-### Download by Division Name
-
-Download data for a specific geographic division (country, state, county, city, etc.):
-
-```bash
-# Search for divisions by name
-rails overture_maps:download:search_divisions[California]
-
-# Download places for a division
-rails overture_maps:download:division[places,California]
-
-# Download buildings for a division
-rails overture_maps:download:division[buildings,Washington]
-
-# With custom options
-rails overture_maps:download:division[places,King\ County,building,2025-01-17,/custom/path]
-```
-
-The task will:
-1. Search for divisions matching the name
-2. Show a list if multiple matches are found
-3. Ask you to select the correct one
-4. Extract the bounding box from the division's shape
-5. Download the requested data within that bounding box
 
 ### Data Structure
 
@@ -246,38 +294,9 @@ Overture Maps data is organized by **theme** and **type**:
 | places | place |
 | transportation | connector, segment |
 
-### Import from Parquet Files
+---
 
-```bash
-# Import places from downloaded Parquet file
-rails overture_maps:import:places[/path/to/places.parquet]
-
-# Import places with category filter
-rails overture_maps:import:places[,s3,eat_and_drink]
-rails overture_maps:import:places[/path/to/file.parquet,,cafes,restaurants]
-
-# Import buildings
-rails overture_maps:import:buildings[/path/to/buildings.parquet]
-
-# Import addresses
-rails overture_maps:import:addresses[/path/to/addresses.parquet]
-
-# Check record count
-rails overture_maps:count[/path/to/file.parquet]
-```
-
-**Category filtering:** When importing places, you can filter by categories to only import specific types of places:
-
-```bash
-# Import only places with eat_and_drink category (includes cafes, restaurants, etc.)
-rails overture_maps:import:places[,s3,eat_and_drink]
-
-# Import multiple specific categories (primary or sub-category)
-rails overture_maps:import:places[,s3,cafes]
-rails overture_maps:import:places[,s3,cafes,hotels]
-```
-
-Use `rails overture_maps:categories:primary` to see available primary categories.
+## Advanced Usage
 
 ### Programmatic Import
 
@@ -293,7 +312,7 @@ OvertureMaps::Import.run!(
   {
     id: record["id"],
     names: record["names"],
-    categories: record["categories"]&.to_json,
+    categories: record["categories"],
     geometry: parse_geometry(record["geometry"]),
     country: record["country"],
     created_at: Time.current,
@@ -305,15 +324,14 @@ end
 ### Read Parquet Files Directly
 
 ```ruby
-reader = OvertureMaps::Import::ParquetReader.new(
-  theme: "places",
-  region: "us-east-1"
-)
+reader = OvertureMaps::Import::ParquetReader.new(theme: "places")
 
 reader.each_record(source: "/path/to/file.parquet") do |record|
   puts record["id"]
 end
 ```
+
+---
 
 ## Model Usage
 
@@ -333,7 +351,7 @@ OverturePlace.near(40.7128, -74.006, 1000)
 OverturePlace.by_category("cafes")
 
 # By country
-OvertartPlace.by_country("US")
+OverturePlace.by_country("US")
 
 # By brand
 OverturePlace.by_brand("Starbucks")

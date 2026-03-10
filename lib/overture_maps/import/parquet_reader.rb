@@ -312,7 +312,7 @@ module OvertureMaps
             next
           end
 
-          if char == '"' &> in_string
+          if char == '"' && in_string
             in_string = false
             buffer << char
             next

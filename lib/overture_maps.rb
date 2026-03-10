@@ -16,6 +16,7 @@ require "overture_maps/import/downloader"
 require "overture_maps/import/parquet_reader"
 require "overture_maps/import/runner"
 require "overture_maps/import/importer"
+require "overture_maps/railtie"
 
 module OvertureMaps
   class Error < StandardError; end

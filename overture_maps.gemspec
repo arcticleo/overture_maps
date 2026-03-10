@@ -18,6 +18,7 @@ Gem::Specification.new do |spec|
 
   # Dependencies
   spec.add_dependency "rails", ">= 7.0"
+  spec.add_dependency "csv"
   spec.add_dependency "rgeo", "~> 3.0"
   spec.add_dependency "rgeo-activerecord"
   spec.add_dependency "activerecord-postgis-adapter"

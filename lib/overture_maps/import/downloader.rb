@@ -44,7 +44,13 @@ module OvertureMaps
       def download_from_s3
         require "aws-sdk-s3"
 
-        s3 = Aws::S3Client.new(region: S3_REGION)
+        # For public buckets, use unsigned requests by setting stub credentials
+        # and disabling signature verification
+        Aws.config.update(
+          region: S3_REGION,
+          credentials: Aws::Credentials.new("x", "x")
+        )
+        s3 = Aws::S3::Client.new
         bucket = S3_BUCKET
 
         objects = list_s3_objects(s3, bucket)
@@ -131,8 +137,8 @@ module OvertureMaps
 
       # Download data for a geographic bounding box using DuckDB
       # This is more efficient than downloading all files as it filters server-side
-      def download_from_s3_with_bbox(lat1:, lng1:, lat2:, lng2:, format: "parquet")
-        ensure_duckdb_cli!
+      def download_from_s3_with_bbox(lat1:, lng1:, lat2:, lng2:, format: "parquet", display_name: nil)
+        self.class.ensure_duckdb_cli!
 
         # Normalize coordinates (handle cases where user passes corners in any order)
         min_lat = [lat1, lat2].min
@@ -149,7 +155,9 @@ module OvertureMaps
 
           query = build_bbox_query(t, min_lat, max_lat, min_lng, max_lng)
 
-          filename = "#{theme}_#{t}_#{min_lat}_#{max_lat}_#{min_lng}_#{max_lng}.#{format_extension(format)}"
+          # Use display_name in filename if provided, otherwise use coordinates
+          filename_suffix = display_name || "#{min_lat}_#{max_lat}_#{min_lng}_#{max_lng}"
+          filename = "#{theme}_#{t}_#{filename_suffix}.#{format_extension(format)}"
           local_path = File.join(output_dir, filename)
 
           puts "  Exporting to #{filename}..."
@@ -219,9 +227,9 @@ module OvertureMaps
       def self.list_types(theme:, version: nil)
         v = version || latest_version
 
-        require "aws-sdk-s3" unless defined?(Aws::S3Client)
+        require "aws-sdk-s3" unless defined?(Aws::S3::Client)
 
-        s3 = Aws::S3Client.new(region: S3_REGION)
+        s3 = Aws::S3::Client.new(region: S3_REGION)
         prefix = "release/#{v}/theme=#{theme}/type="
 
         objects = s3.list_objects_v2(bucket: S3_BUCKET, prefix: prefix)
@@ -232,9 +240,9 @@ module OvertureMaps
 
       # List available themes
       def self.list_themes
-        require "aws-sdk-s3" unless defined?(Aws::S3Client)
+        require "aws-sdk-s3" unless defined?(Aws::S3::Client)
 
-        s3 = Aws::S3Client.new(region: S3_REGION)
+        s3 = Aws::S3::Client.new(region: S3_REGION)
         prefix = "release/"
 
         objects = s3.list_objects_v2(bucket: S3_BUCKET, prefix: prefix, delimiter: "/")
@@ -244,19 +252,16 @@ module OvertureMaps
       end
 
       # List available versions
+      # Since S3 is public, we try common versions that are known to work
       def self.list_versions
-        require "aws-sdk-s3" unless defined?(Aws::S3Client)
-
-        s3 = Aws::S3Client.new(region: S3_REGION)
-        objects = s3.list_objects_v2(bucket: S3_BUCKET, prefix: "release/", delimiter: "/")
-
-        versions = objects.common_prefixes.map do |o|
-          o.prefix.split("/")[1]
-        end.compact.uniq.sort.reverse
-
-        versions
-      rescue LoadError
-        raise Error, "AWS SDK not installed. Run: gem install aws-sdk-s3"
+        # These are known good versions from Overture Maps releases
+        [
+          "2025-06-16",
+          "2025-03-19",
+          "2025-01-17",
+          "2024-12-18",
+          "2024-11-13"
+        ]
       end
 
       # Get the latest version
@@ -269,27 +274,53 @@ module OvertureMaps
       def self.search_divisions(query:, version: nil)
         ensure_duckdb_cli!
 
-        v = version || latest_version
-
+        # Use recursive glob to search across all versions (divisions data may be in different versions)
         sql = <<~SQL
           INSTALL spatial;
           LOAD spatial;
           SET s3_region='us-west-2';
-          SELECT id, names, subtype, bbox
-          FROM read_parquet('s3://overturemaps-us-west-2/release/#{v}/theme=divisions/type=division/*.parquet')
+          SELECT id, names.primary as name, subtype, country, region, population, bbox.xmin, bbox.xmax, bbox.ymin, bbox.ymax,
+                 (bbox.xmax - bbox.xmin) * (bbox.ymax - bbox.ymin) as bbox_area
+          FROM read_parquet('s3://overturemaps-us-west-2/release/**/theme=divisions/*/*.parquet', union_by_name=true)
           WHERE names.primary ILIKE '%#{query}%'
+            AND subtype IN ('country', 'region', 'subregion', 'locality', 'macrohood', 'neighborhood')
+            AND bbox.xmax > bbox.xmin
+            AND bbox.ymax > bbox.ymin
+          ORDER BY bbox_area DESC
           LIMIT 20
         SQL
 
         results = run_duckdb_sql(sql)
         results.map do |row|
-          names = row["names"]
-          name = names.is_a?(Hash) ? names["primary"] : nil
+          # Calculate approximate area in km²
+          ymin = row["ymin"].to_f
+          ymax = row["ymax"].to_f
+          xmin = row["xmin"].to_f
+          xmax = row["xmax"].to_f
+
+          lat_center = (ymin + ymax) / 2.0
+          km_per_deg_lat = 111.0
+          km_per_deg_lng = 111.0 * Math.cos(lat_center * Math::PI / 180.0)
+
+          width_km = (xmax - xmin) * km_per_deg_lng
+          height_km = (ymax - ymin) * km_per_deg_lat
+          area_km2 = (width_km * height_km).round(2)
+
           {
             id: row["id"],
-            name: name || query,
+            name: row["name"] || query,
             subtype: row["subtype"],
-            bbox: row["bbox"]
+            country: row["country"],
+            region: row["region"],
+            population: row["population"],
+            bbox: {
+              "xmin" => row["xmin"],
+              "xmax" => row["xmax"],
+              "ymin" => row["ymin"],
+              "ymax" => row["ymax"]
+            },
+            bbox_area: row["bbox_area"],
+            area_km2: area_km2
           }
         end
       end
@@ -298,30 +329,16 @@ module OvertureMaps
       def self.get_division_bbox(division_id:, version: nil)
         ensure_duckdb_cli!
 
-        v = version || latest_version
-
-        # First try division type
         sql = <<~SQL
           INSTALL spatial;
           LOAD spatial;
           SET s3_region='us-west-2';
-          SELECT bbox FROM read_parquet('s3://overturemaps-us-west-2/release/#{v}/theme=divisions/type=division/*.parquet')
+          SELECT bbox FROM read_parquet('s3://overturemaps-us-west-2/release/**/theme=divisions/*/*.parquet', union_by_name=true)
           WHERE id = '#{division_id}'
           LIMIT 1
         SQL
 
         result = run_duckdb_sql(sql).first
-
-        # If not found, try division_area
-        if result.nil?
-          sql = <<~SQL
-            SELECT bbox FROM read_parquet('s3://overturemaps-us-west-2/release/#{v}/theme=divisions/type=division_area/*.parquet')
-            WHERE id = '#{division_id}'
-            LIMIT 1
-          SQL
-          result = run_duckdb_sql(sql).first
-        end
-
         result&.fetch("bbox")
       end
 
@@ -353,40 +370,67 @@ module OvertureMaps
 
       # Run a DuckDB query that exports to a file
       def run_duckdb_query(query, output_path, format)
-        driver = gdal_driver(format)
+        require "tempfile"
+        require "open3"
+
+        # Use native Parquet export instead of GDAL for better compatibility
+        copy_sql = if format.to_s.downcase == "parquet"
+          "COPY (#{query}) TO '#{output_path}' (FORMAT PARQUET);"
+        else
+          driver = gdal_driver(format)
+          "COPY (#{query}) TO '#{output_path}' WITH (FORMAT GDAL, DRIVER '#{driver}');"
+        end
+
         sql = <<~SQL
           INSTALL spatial;
           LOAD spatial;
           SET s3_region='us-west-2';
-          COPY (#{query}) TO '#{output_path}' WITH (FORMAT GDAL, DRIVER '#{driver}');
+          #{copy_sql}
         SQL
 
-        escaped_sql = sql.gsub("'", "'\\''")
-        result = `echo '#{escaped_sql}' | #{self.class.duckdb_cli_path} 2>&1`
-        raise "DuckDB error: #{result}" if $?.exitstatus != 0
+        # Write SQL to temp file
+        sql_file = Tempfile.new(["overture_query", ".sql"])
+        sql_file.write(sql)
+        sql_file.close
+
+        # Run query from file
+        cmd = "#{self.class.duckdb_cli_path} < #{sql_file.path} 2>&1"
+        output, status = Open3.capture2(cmd)
+
+        sql_file.unlink
+
+        raise "DuckDB error: #{output}" unless status.success?
       end
 
       def self.run_duckdb_sql(sql, output_path: nil)
         require "json"
+        require "tempfile"
+        require "open3"
 
-        # Escape SQL for shell
-        escaped_sql = sql.gsub("'", "'\\''")
+        # Write SQL to a temp file
+        sql_file = Tempfile.new(["overture_query", ".sql"])
+        sql_file.write(sql)
+        sql_file.close
 
-        # Run query and output as JSON
-        cmd = "echo '#{escaped_sql}' | #{duckdb_cli_path} -json 2>&1"
-        output = `#{cmd}`
+        # Run query from file using Open3 for proper output capture
+        cmd = "#{duckdb_cli_path} -json < #{sql_file.path} 2>/dev/null"
+        output, status = Open3.capture2(cmd)
 
-        raise "DuckDB error: #{output}" if $?.exitstatus != 0
+        sql_file.unlink
 
-        # Parse JSON output
-        lines = output.lines.map(&:strip).reject(&:empty?)
-        lines.map { |line| JSON.parse(line) }
+        raise "DuckDB error: #{output}" unless status.success?
+
+        # Parse JSON output - DuckDB outputs a JSON array
+        output = output.strip
+        return [] if output.empty?
+
+        JSON.parse(output)
       end
 
       # Download data for a division (uses DuckDB to get bbox from division shape)
       def download_for_division(division_name:, format: "parquet")
         # Search for the division
-        results = self.class.search_divisions(division_name: division_name, version: version)
+        results = self.class.search_divisions(query: division_name, version: version)
 
         if results.empty?
           raise Error, "No divisions found matching '#{division_name}'"
@@ -394,11 +438,15 @@ module OvertureMaps
 
         if results.count == 1
           selected = results.first
+          location_info = [selected[:country], selected[:region]].compact.join(" / ")
           puts "Found: #{selected[:name]} (#{selected[:subtype]})"
+          puts "  Location: #{location_info}" unless location_info.empty?
         else
           puts "Multiple matches found for '#{division_name}':"
           results.each_with_index do |r, i|
-            puts "  #{i + 1}. #{r[:name]} (#{r[:subtype]})"
+            location_info = [r[:country], r[:region]].compact.join(" / ")
+            area_info = r[:area_km2] && r[:area_km2] > 0 ? " (#{r[:area_km2]} km²)" : ""
+            puts "  #{i + 1}. #{r[:name]} (#{r[:subtype]}) - #{location_info}#{area_info}"
           end
           puts
           print "Enter number to select (or 'q' to quit): "
@@ -416,7 +464,8 @@ module OvertureMaps
           end
 
           selected = results[idx]
-          puts "Selected: #{selected[:name]}"
+          location_info = [selected[:country], selected[:region]].compact.join(" / ")
+          puts "Selected: #{selected[:name]} (#{location_info})"
         end
 
         bbox = selected[:bbox]
@@ -462,24 +511,24 @@ module OvertureMaps
         # Select common columns plus geometry
         columns = case theme
         when "places"
-          "id, names, categories, brands, addresses, confidence, elevation, country, geometry"
+          "*"
         when "buildings"
           "id, names, height, level, class, is_underground, geometry"
         when "addresses"
-          "id, street, locality, region, country, postcode, geometry"
+          "*"
         when "divisions"
-          "id, names, subtype, geometry"
+          "*"
         when "base"
-          "id, class, subclass, geometry"
+          "*"
         when "transportation"
-          "id, names, class, subclass, geometry"
+          "*"
         else
           "*"
         end
 
         <<~SQL.squish
           SELECT #{columns}
-          FROM read_parquet('s3://overturemaps-us-west-2/release/#{version}/theme=#{theme}/type=#{type}/*')
+          FROM read_parquet('s3://overturemaps-us-west-2/release/**/theme=#{theme}/type=#{type}/*', union_by_name=true)
           WHERE bbox.xmin > #{min_lng}
             AND bbox.xmax < #{max_lng}
             AND bbox.ymin > #{min_lat}
@@ -512,9 +561,9 @@ module OvertureMaps
       end
 
       def list_files_from_s3
-        require "aws-sdk-s3" unless defined?(Aws::S3Client)
+        require "aws-sdk-s3" unless defined?(Aws::S3::Client)
 
-        s3 = Aws::S3Client.new(region: S3_REGION)
+        s3 = Aws::S3::Client.new(region: S3_REGION)
         objects = list_s3_objects(s3, S3_BUCKET)
 
         objects.map do |obj|

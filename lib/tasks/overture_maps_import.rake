@@ -1,58 +1,15 @@
 # frozen_string_literal: true
 
 require "rake"
+require "csv"
 require "overture_maps"
 require "overture_maps/import/parquet_reader"
 require "overture_maps/import/runner"
 
 namespace :overture_maps do
   namespace :import do
-    desc "Fetch and import categories from Overture Maps taxonomy"
-    task :categories, [] do
-      require_model("OvertureCategory")
-
-      puts "Fetching categories from Overture Maps taxonomy..."
-
-      url = "https://raw.githubusercontent.com/OvertureMaps/schema/main/docs/schema/concepts/by-theme/places/overture_categories.csv"
-
-      require "net/http"
-      require "csv"
-
-      response = Net::HTTP.get(URI(url))
-      raise "Failed to fetch categories" unless response
-
-      csv = CSV.new(response, headers: false, col_sep: ";")
-      count = 0
-
-      csv.each do |row|
-        next if row.empty?
-
-        name = row[0]&.strip
-        taxonomy_str = row[1]&.strip
-
-        next if name.nil? || name.empty?
-
-        # Parse taxonomy to extract primary category and hierarchy level
-        taxonomy = taxonomy_str.gsub(/[\[\]]/, "").split(",").map(&:strip)
-        primary = taxonomy.first
-        hierarchy_level = taxonomy.size - 1
-
-        OvertureCategory.find_or_create_by!(name: name) do |c|
-          c.primary_category = primary
-          c.hierarchy_level = hierarchy_level
-        end
-        count += 1
-      end
-
-      puts "Imported #{count} categories!"
-      puts "\nPrimary categories available:"
-      OvertureCategory.distinct.pluck(:primary_category).compact.sort.each do |pc|
-        puts "  - #{pc}"
-      end
-    end
-
     desc "Import places from Overture Maps Parquet files"
-    task :places, [:region, :source, :categories] do |_t, args|
+    task :places, [:region, :source, :categories] => :environment do |_t, args|
       region = args[:region]
       source = args[:source]&.to_sym || :s3
       categories = args[:categories]&.split(",")&.map(&:strip)
@@ -82,7 +39,7 @@ namespace :overture_maps do
     end
 
     desc "Import buildings from Overture Maps Parquet files"
-    task :buildings, [:region, :source] do |_t, args|
+    task :buildings, [:region, :source] => :environment do |_t, args|
       region = args[:region]
       source = args[:source]&.to_sym || :s3
 
@@ -108,7 +65,7 @@ namespace :overture_maps do
     end
 
     desc "Import addresses from Overture Maps Parquet files"
-    task :addresses, [:region, :source] do |_t, args|
+    task :addresses, [:region, :source] => :environment do |_t, args|
       region = args[:region]
       source = args[:source]&.to_sym || :s3
 
@@ -134,7 +91,7 @@ namespace :overture_maps do
     end
 
     desc "Import all themes for a region"
-    task :all, [:region, :source] do |_t, args|
+    task :all, [:region, :source] => :environment do |_t, args|
       region = args[:region]
       source = args[:source]&.to_sym || :s3
 
@@ -163,7 +120,7 @@ namespace :overture_maps do
     end
 
     desc "Show import statistics"
-    task :stats do |_t, _args|
+    task :stats => :environment do |_t, _args|
       puts "Import Statistics:"
       puts "  Places:     #{OverturePlace.count rescue 'N/A'}"
       puts "  Buildings:   #{OvertureBuilding.count rescue 'N/A'}"
@@ -174,10 +131,20 @@ end
 
 def require_model(model_name)
   begin
-    Object.const_get(model_name)
+    # Use Rails' constantize to trigger autoloading
+    model_class = model_name.constantize
+
+    # Also check if the table exists
+    unless model_class.table_exists?
+      puts "Error: #{model_name} table does not exist."
+      puts "Please run: rails db:migrate"
+      exit 1
+    end
+
+    model_class
   rescue NameError
     puts "Error: #{model_name} model not found."
-    puts "Please run: rails generate overture_maps:#{model_name.underscore}"
+    puts "Please run: rails generate overture_maps:install"
     exit 1
   end
 end
@@ -264,60 +231,71 @@ def transform_address_record(record)
   }
 end
 
-namespace :categories do
-  CATEGORIES_URL = "https://raw.githubusercontent.com/OvertureMaps/schema/main/docs/schema/concepts/by-theme/places/overture_categories.csv"
+namespace :overture_maps do
+  namespace :categories do
+    desc "Populate categories from Overture Maps taxonomy"
+    task :populate => :environment do
+      require_model("OvertureCategory")
 
-  desc "Fetch categories from Overture Maps schema and populate database"
-  task :populate, [] do
-    require_model("OvertureCategory")
+      puts "Fetching categories from Overture Maps taxonomy..."
 
-    puts "Fetching categories from Overture Maps schema..."
+      url = "https://raw.githubusercontent.com/OvertureMaps/schema/main/docs/schema/concepts/by-theme/places/overture_categories.csv"
 
-    require "net/http"
-    require "csv"
+      require "net/http"
 
-    uri = URI(CATEGORIES_URL)
-    response = Net::HTTP.get(uri)
+      response = Net::HTTP.get(URI(url))
+      raise "Failed to fetch categories" unless response
 
-    count = 0
-    CSV.parse(response, col_sep: ";") do |row|
-      name, taxonomy_str = row
-      next unless name && taxonomy_str
+      csv = CSV.new(response, headers: false, col_sep: ";")
+      count = 0
 
-      # Parse taxonomy like [eat_and_drink,restaurant]
-      taxonomy = taxonomy_str.tr("[]", "").split(",").map(&:strip)
-      primary = taxonomy.first
-      hierarchy_level = taxonomy.length - 1
+      csv.each do |row|
+        next if row.empty?
 
-      OvertureCategory.find_or_create_by!(name: name) do |c|
-        c.primary_category = primary
-        c.hierarchy_level = hierarchy_level
+        name = row[0]&.strip
+        taxonomy_str = row[1]&.strip
+
+        next if name.nil? || name.empty?
+
+        # Parse taxonomy to extract primary category and hierarchy level
+        taxonomy = taxonomy_str.gsub(/[\[\]]/, "").split(",").map(&:strip)
+        primary = taxonomy.first
+        hierarchy_level = taxonomy.size - 1
+
+        OvertureCategory.find_or_create_by!(name: name) do |c|
+          c.primary_category = primary
+          c.hierarchy_level = hierarchy_level
+        end
+        count += 1
       end
-      count += 1
-    end
 
-    puts "Populated #{count} categories!"
-  end
-
-  desc "List all categories"
-  task :list, [] do
-    require_model("OvertureCategory")
-
-    puts "Primary categories:"
-    OvertureCategory.distinct.pluck(:primary_category).compact.sort.each do |pc|
-      puts "  - #{pc}"
-      OvertureCategory.where(primary_category: pc).order(:hierarchy_level, :name).each do |cat|
-        puts "      #{cat.name}"
+      puts "Imported #{count} categories!"
+      puts "\nPrimary categories available:"
+      OvertureCategory.distinct.pluck(:primary_category).compact.sort.each do |pc|
+        puts "  - #{pc}"
       end
     end
-  end
 
-  desc "List primary categories only"
-  task :primary, [] do
-    require_model("OvertureCategory")
+    desc "List all categories"
+    task :list => :environment do
+      require_model("OvertureCategory")
 
-    OvertureCategory.distinct.pluck(:primary_category).compact.sort.each do |pc|
-      puts pc
+      puts "Primary categories:"
+      OvertureCategory.distinct.pluck(:primary_category).compact.sort.each do |pc|
+        puts "  - #{pc}"
+        OvertureCategory.where(primary_category: pc).order(:hierarchy_level, :name).each do |cat|
+          puts "      #{cat.name}"
+        end
+      end
+    end
+
+    desc "List primary categories only"
+    task :primary => :environment do
+      require_model("OvertureCategory")
+
+      OvertureCategory.distinct.pluck(:primary_category).compact.sort.each do |pc|
+        puts pc
+      end
     end
   end
 end

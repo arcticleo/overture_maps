@@ -64,17 +64,17 @@ rails db:migrate
 Before importing places, fetch the categories taxonomy:
 
 ```bash
-rails overture_maps:import:categories:populate
+rails overture_maps:categories:populate
 ```
 
 This fetches all ~2,100 categories from Overture Maps schema. You can then list them:
 
 ```bash
 # List all categories
-rails overture_maps:import:categories:list
+rails overture_maps:categories:list
 
 # List just primary categories
-rails overture_maps:import:categories:primary
+rails overture_maps:categories:primary
 ```
 
 ### Generate Individual Models
@@ -130,8 +130,38 @@ rails overture_maps:download:transportation
 # Download all themes
 rails overture_maps:download:all
 
+# Download all themes for a location (uses location name, not coordinates)
+rails overture_maps:download:all[Seattle]
+rails "overture_maps:download:all[New York]"
+
+# Note: For bounding box with :all, use underscores as separators:
+rails overture_maps:download:all[47.606_-122.336_47.609_-122.333]
+
+# Or use location names (commas work for individual tasks only):
+rails overture_maps:download:places[47.606,-122.336,47.609,-122.333]
+rails overture_maps:download:places[47.606_-122.336_47.609_-122.333]
+
 # Download from Azure instead of S3
 rails overture_maps:download:azure:places
+```
+
+**Download by Location Name:**
+
+```bash
+# Download places for a city (shows list if ambiguous)
+rails overture_maps:download:places[Seattle]
+rails overture_maps:download:places[Stockholm]
+
+# Download buildings for a geographic area
+rails overture_maps:download:buildings[California]
+
+# Download addresses for a country
+rails overture_maps:download:addresses[Germany]
+
+# For names with spaces, use quotes or escape the space
+rails "overture_maps:download:places[New York]"
+rails overture_maps:download:places[New\ York]
+rails "overture_maps:download:buildings[San Francisco]"
 ```
 
 **Options:**
@@ -247,7 +277,7 @@ rails overture_maps:import:places[,s3,cafes]
 rails overture_maps:import:places[,s3,cafes,hotels]
 ```
 
-Use `rails overture_maps:import:categories:primary` to see available primary categories.
+Use `rails overture_maps:categories:primary` to see available primary categories.
 
 ### Programmatic Import
 

@@ -6,92 +6,8 @@ require "overture_maps/import/downloader"
 
 namespace :overture_maps do
   namespace :download do
-    # Places
-    desc "Download places Parquet files from S3"
-    task :places, [:type, :version, :output_dir] do |_t, args|
-      download_files(
-        theme: "places",
-        type: args[:type],
-        version: args[:version],
-        output_dir: args[:output_dir] || "tmp/overture",
-        provider: :s3
-      )
-    end
-
-    # Buildings
-    desc "Download buildings Parquet files from S3"
-    task :buildings, [:type, :version, :output_dir] do |_t, args|
-      download_files(
-        theme: "buildings",
-        type: args[:type],
-        version: args[:version],
-        output_dir: args[:output_dir] || "tmp/overture",
-        provider: :s3
-      )
-    end
-
-    # Addresses
-    desc "Download addresses Parquet files from S3"
-    task :addresses, [:type, :version, :output_dir] do |_t, args|
-      download_files(
-        theme: "addresses",
-        type: args[:type],
-        version: args[:version],
-        output_dir: args[:output_dir] || "tmp/overture",
-        provider: :s3
-      )
-    end
-
-    # Base
-    desc "Download base data Parquet files from S3"
-    task :base, [:type, :version, :output_dir] do |_t, args|
-      download_files(
-        theme: "base",
-        type: args[:type],
-        version: args[:version],
-        output_dir: args[:output_dir] || "tmp/overture",
-        provider: :s3
-      )
-    end
-
-    # Divisions
-    desc "Download divisions Parquet files from S3"
-    task :divisions, [:type, :version, :output_dir] do |_t, args|
-      download_files(
-        theme: "divisions",
-        type: args[:type],
-        version: args[:version],
-        output_dir: args[:output_dir] || "tmp/overture",
-        provider: :s3
-      )
-    end
-
-    # Transportation
-    desc "Download transportation Parquet files from S3"
-    task :transportation, [:type, :version, :output_dir] do |_t, args|
-      download_files(
-        theme: "transportation",
-        type: args[:type],
-        version: args[:version],
-        output_dir: args[:output_dir] || "tmp/overture",
-        provider: :s3
-      )
-    end
-
-    # Download all themes
-    desc "Download all themes from S3"
-    task :all, [:type, :version, :output_dir] do |_t, args|
-      type = args[:type]
-      version = args[:version]
-      output_dir = args[:output_dir] || "tmp/overture"
-
-      %w[places buildings addresses base divisions transportation].each do |theme|
-        Rake::Task["overture_maps:download:#{theme}"].invoke(type, version, output_dir)
-        Rake::Task["overture_maps:download:#{theme}"].reenable
-      end
-
-      puts "\nAll downloads complete!"
-    end
+    # Note: Simple download tasks (places, buildings, addresses, divisions,
+    # transportation, base) and :all are defined in overture_maps.rake
 
     # Azure namespace
     namespace :azure do
@@ -468,7 +384,10 @@ def search_divisions(query:, version:)
     else
       puts "Results:"
       results.each_with_index do |r, i|
-        puts "  #{i + 1}. #{r[:name]} (#{r[:subtype]})"
+        location_parts = [r[:country], r[:region]].compact
+        location = location_parts.any? ? " - #{location_parts.join(" / ")}" : ""
+        pop_info = r[:population] ? " (#{r[:population].to_s.reverse.gsub(/(\d{3})(?=\d)/, '\\1,').reverse} people)" : ""
+        puts "  #{i + 1}. #{r[:name]} (#{r[:subtype]})#{location}#{pop_info}"
       end
     end
   rescue OvertureMaps::Import::Error => e

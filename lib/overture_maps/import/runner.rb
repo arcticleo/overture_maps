@@ -96,19 +96,42 @@ module OvertureMaps
       def flush_records(records)
         return if records.empty?
 
-        model_class.insert_all!(records)
-        @imported_count += records.length
-      rescue StandardError => e
-        @error_count += records.length
-        @errors << { error: e.message, records: records.length }
+        # Deduplicate records by ID (keep last occurrence)
+        deduped = records.reverse.uniq { |r| r[:id] || r["id"] }.reverse
+        duplicates_count = records.length - deduped.length
 
-        # Try inserting one by one to identify bad records
-        records.each do |record|
+        # Normalize records to all have the same keys (required for upsert_all)
+        all_keys = deduped.flat_map(&:keys).uniq
+        normalized = deduped.map do |record|
+          all_keys.each_with_object({}) do |key, hash|
+            hash[key] = record.fetch(key, nil)
+          end
+        end
+
+        # Use upsert_all to handle duplicate keys (update existing records)
+        model_class.upsert_all(
+          normalized,
+          unique_by: :id,
+          returning: false,
+          record_timestamps: true
+        )
+        @imported_count += deduped.length
+      rescue StandardError => e
+        # Batch failed - will try individual upserts
+        @errors << { error: e.message, records: deduped.length }
+
+        # Try upserting one by one to identify bad records
+        deduped.each do |record|
           begin
-            model_class.insert!(record)
+            model_class.upsert(
+              record,
+              unique_by: :id,
+              returning: false,
+              record_timestamps: true
+            )
             @imported_count += 1
-            @error_count -= 1
           rescue StandardError => record_error
+            @error_count += 1
             @errors << { error: record_error.message, record: record }
           end
         end

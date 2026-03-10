@@ -12,8 +12,9 @@ class CreateOvertureBuildings < ActiveRecord::Migration[8.0]
     end
 
     # Add geometry column using PostGIS adapter
-    add_column :overture_buildings, :geometry, :st_point, geographic: true, srid: 4326
-    add_index :overture_buildings, :geometry, using: :gist
+    # Using generic geometry type to support Polygon, MultiPolygon, etc.
+    execute "ALTER TABLE overture_buildings ADD COLUMN geometry geometry(Geometry,4326)"
+    execute "CREATE INDEX index_overture_buildings_on_geometry ON overture_buildings USING GIST (geometry)"
 
     add_index :overture_buildings, :height
     add_index :overture_buildings, :level

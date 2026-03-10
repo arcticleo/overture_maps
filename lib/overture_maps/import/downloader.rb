@@ -275,6 +275,7 @@ module OvertureMaps
         ensure_duckdb_cli!
 
         # Use recursive glob to search across all versions (divisions data may be in different versions)
+        # Note: We deduplicate in Ruby since DISTINCT ON requires ordering by id first
         sql = <<~SQL
           INSTALL spatial;
           LOAD spatial;
@@ -286,13 +287,18 @@ module OvertureMaps
             AND subtype IN ('country', 'region', 'subregion', 'locality', 'macrohood', 'neighborhood')
             AND bbox.xmax > bbox.xmin
             AND bbox.ymax > bbox.ymin
-          ORDER BY bbox_area DESC
-          LIMIT 20
+          ORDER BY
+            CASE WHEN LOWER(names.primary) = LOWER('#{query}') THEN 0 ELSE 1 END,
+            bbox_area DESC
+          LIMIT 100
         SQL
 
         results = run_duckdb_sql(sql)
-        results.map do |row|
-          # Calculate approximate area in km²
+        # Deduplicate by ID - divisions may appear in multiple source files
+        results = results.uniq { |row| row["id"] }
+        # Limit to 50 after deduplication to show exact matches + partial matches
+        results = results.first(50)
+        mapped = results.map do |row|
           ymin = row["ymin"].to_f
           ymax = row["ymax"].to_f
           xmin = row["xmin"].to_f
@@ -413,12 +419,12 @@ module OvertureMaps
         sql_file.close
 
         # Run query from file using Open3 for proper output capture
-        cmd = "#{duckdb_cli_path} -json < #{sql_file.path} 2>/dev/null"
+        cmd = "#{duckdb_cli_path} -json < #{sql_file.path} 2>&1"
         output, status = Open3.capture2(cmd)
 
         sql_file.unlink
 
-        raise "DuckDB error: #{output}" unless status.success?
+        raise "DuckDB error: #{output.empty? ? 'command failed with no output' : output}" unless status.success?
 
         # Parse JSON output - DuckDB outputs a JSON array
         output = output.strip
@@ -526,13 +532,16 @@ module OvertureMaps
           "*"
         end
 
+        # Use DISTINCT ON (id) to deduplicate records with same ID
+        # This prevents duplicates from multiple source files
         <<~SQL.squish
-          SELECT #{columns}
+          SELECT DISTINCT ON (id) #{columns}
           FROM read_parquet('s3://overturemaps-us-west-2/release/**/theme=#{theme}/type=#{type}/*', union_by_name=true)
           WHERE bbox.xmin > #{min_lng}
             AND bbox.xmax < #{max_lng}
             AND bbox.ymin > #{min_lat}
             AND bbox.ymax < #{max_lat}
+          ORDER BY id
         SQL
       end
 

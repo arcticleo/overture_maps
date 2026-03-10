@@ -203,6 +203,8 @@ rails overture_maps:import:versions
 - Re-import the same data multiple times without re-downloading
 - Work with the data outside of Rails (e.g., in QGIS, pandas, etc.)
 
+**Note:** Downloaded files are saved to `tmp/overture/` by default (e.g., `tmp/overture/places_seattle.parquet`).
+
 ### Download by Location Name
 
 ```bash

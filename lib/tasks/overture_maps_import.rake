@@ -15,6 +15,20 @@ COORDS_REGEX = /^-?\d+(\.\d+)?[,\s]+-?\d+(\.\d+)?[,\s]+-?\d+(\.\d+)?[,\s]+-?\d+(
 def parse_location(location)
   return {} unless location
 
+  # Check for pipe format: "coordinates|display_name"
+  if location.to_s.include?("|")
+    coords_part, display_name = location.to_s.split("|", 2)
+    coords = coords_part.split(/[,\s]+/).map(&:to_f)
+    return {
+      type: :bbox,
+      min_lat: [coords[0], coords[2]].min,
+      max_lat: [coords[0], coords[2]].max,
+      min_lng: [coords[1], coords[3]].min,
+      max_lng: [coords[1], coords[3]].max,
+      display_name: display_name
+    }
+  end
+
   # Check if it looks like coordinates (4 numbers separated by commas or underscores)
   if location.to_s.match?(/^-?\d+(\.\d+)?[,\s]+-?\d+(\.\d+)?[,\s]+-?\d+(\.\d+)?[,\s]+-?\d+(\.\d+)?$/)
     coords = location.to_s.split(/[,\s]+/).map(&:to_f)
@@ -117,6 +131,19 @@ def search_and_select_division(name)
 end
 
 def import_from_bbox(theme:, model_class:, min_lat:, max_lat:, min_lng:, max_lng:, categories: nil)
+  # Ensure minimum bbox size (about 1km x 1km at equator) to avoid empty results
+  min_bbox_size = 0.01  # roughly 1km in degrees
+  if (max_lat - min_lat).abs < min_bbox_size
+    center_lat = (min_lat + max_lat) / 2
+    min_lat = center_lat - min_bbox_size / 2
+    max_lat = center_lat + min_bbox_size / 2
+  end
+  if (max_lng - min_lng).abs < min_bbox_size
+    center_lng = (min_lng + max_lng) / 2
+    min_lng = center_lng - min_bbox_size / 2
+    max_lng = center_lng + min_bbox_size / 2
+  end
+
   puts "Importing #{theme} from S3 with spatial filtering..."
   puts "  Bounding box: #{min_lat}, #{min_lng} to #{max_lat}, #{max_lng}"
   puts
@@ -138,8 +165,8 @@ def import_from_bbox(theme:, model_class:, min_lat:, max_lat:, min_lng:, max_lng
   types.each do |type|
     puts "Querying #{theme}/#{type} from S3..."
 
-    # Query S3 for records
-    records = OvertureMaps::Import::ParquetReader.query_s3_with_bbox(
+    # Get count first (more memory efficient)
+    count = OvertureMaps::Import::ParquetReader.count_s3_with_bbox(
       theme: theme,
       type: type,
       min_lat: min_lat,
@@ -148,34 +175,61 @@ def import_from_bbox(theme:, model_class:, min_lat:, max_lat:, min_lng:, max_lng
       max_lng: max_lng
     )
 
-    if records.empty?
+    if count == 0
       puts "  No data found"
       next
     end
 
-    puts "  Found #{records.length} records, importing..."
+    puts "  Found #{count} records, importing with streaming..."
 
-    runner = OvertureMaps::Import::Runner.new(
-      model_class: model_class,
-      batch_size: ENV.fetch("BATCH_SIZE", 1000).to_i
-    )
-
+    all_errors = []
     filter = categories ? ->(r) { matches_category?(r, categories) } : nil
 
-    runner.import_from_records(records, filter: filter)
+    # Process records in batches to avoid memory issues
+    batch_number = 0
 
-    total_imported += runner.imported_count
-    total_errors += runner.error_count
+    OvertureMaps::Import::ParquetReader.stream_s3_with_bbox(
+      theme: theme,
+      type: type,
+      min_lat: min_lat,
+      max_lat: max_lat,
+      min_lng: min_lng,
+      max_lng: max_lng,
+      batch_size: 5000
+    ) do |batch|
+      batch_number += 1
 
-    puts "  Imported: #{runner.imported_count}, Errors: #{runner.error_count}"
+      runner = OvertureMaps::Import::Runner.new(
+        model_class: model_class,
+        batch_size: ENV.fetch("BATCH_SIZE", 1000).to_i
+      )
+
+      runner.import_from_records(batch, filter: filter)
+
+      total_imported += runner.imported_count
+      total_errors += runner.error_count
+      all_errors.concat(runner.errors)
+
+      if batch_number % 2 == 0 || batch.length < 50000
+        puts "  Batch #{batch_number}: imported #{total_imported} so far (#{total_errors} errors)"
+      end
+    end
+
+    puts "  Streaming import complete: #{total_imported} imported, #{total_errors} errors"
+
+    if all_errors.any? && ENV["VERBOSE"]
+      puts "\n  Error details:"
+      all_errors.first(3).each do |err|
+        puts "    - #{err[:error]}"
+      end
+      puts "    ... and #{all_errors.length - 3} more" if all_errors.length > 3
+    end
   end
 
   puts
   puts "Import Complete!"
   puts "  Total imported: #{total_imported}"
   puts "  Total errors: #{total_errors}"
-
-  exit(1) if total_errors > 0 && !ENV["IGNORE_ERRORS"]
 end
 
 def import_from_local_file(theme:, model_class:, local_file:, categories: nil)
@@ -199,7 +253,14 @@ def import_from_local_file(theme:, model_class:, local_file:, categories: nil)
   puts "  Imported: #{runner.imported_count}"
   puts "  Errors:   #{runner.error_count}"
 
-  exit(1) unless runner.success?
+  # Show first few errors if any
+  if runner.errors.any? && ENV["VERBOSE"]
+    puts "\nError details:"
+    runner.errors.first(5).each do |err|
+      puts "  - #{err[:error]}"
+    end
+    puts "  ... and #{runner.errors.length - 5} more" if runner.errors.length > 5
+  end
 end
 
 def require_model(model_name)
@@ -287,11 +348,9 @@ namespace :overture_maps do
           categories: categories
         )
       else
-        # Search for division first
-        division = search_and_select_division(parsed[:name])
-
-        # Check for local file
-        local_file = check_local_file("places", division[:name])
+        # Check for local file FIRST using the original search term or display_name from pipe format
+        location_name = parsed[:display_name] || parsed[:name]
+        local_file = check_local_file("places", location_name)
 
         if local_file
           choice = prompt_for_local_file(local_file)
@@ -304,14 +363,18 @@ namespace :overture_maps do
               local_file: local_file,
               categories: categories
             )
+            next  # Skip to next iteration (done with this theme)
           when :cancel
             puts "Cancelled."
             exit 0
           when :download
             puts "Downloading fresh data..."
-            # Fall through to S3 import
+            # Fall through to division search and S3 import
           end
         end
+
+        # Search for division (only if not using pipe format with display_name)
+        division = search_and_select_division(parsed[:name] || location_name)
 
         # Import from S3 using division's bbox
         bbox = division[:bbox]
@@ -359,8 +422,9 @@ namespace :overture_maps do
           max_lng: parsed[:max_lng]
         )
       else
-        division = search_and_select_division(parsed[:name])
-        local_file = check_local_file("buildings", division[:name])
+        # Check for local file FIRST using the original search term or display_name from pipe format
+        location_name = parsed[:display_name] || parsed[:name]
+        local_file = check_local_file("buildings", location_name)
 
         if local_file
           choice = prompt_for_local_file(local_file)
@@ -378,8 +442,11 @@ namespace :overture_maps do
             exit 0
           when :download
             puts "Downloading fresh data..."
+            # Fall through to division search and S3 import
           end
         end
+
+        division = search_and_select_division(parsed[:name] || location_name)
 
         bbox = division[:bbox]
         unless bbox
@@ -425,8 +492,9 @@ namespace :overture_maps do
           max_lng: parsed[:max_lng]
         )
       else
-        division = search_and_select_division(parsed[:name])
-        local_file = check_local_file("addresses", division[:name])
+        # Check for local file FIRST using the original search term or display_name from pipe format
+        location_name = parsed[:display_name] || parsed[:name]
+        local_file = check_local_file("addresses", location_name)
 
         if local_file
           choice = prompt_for_local_file(local_file)
@@ -444,8 +512,11 @@ namespace :overture_maps do
             exit 0
           when :download
             puts "Downloading fresh data..."
+            # Fall through to division search and S3 import
           end
         end
+
+        division = search_and_select_division(parsed[:name] || location_name)
 
         bbox = division[:bbox]
         unless bbox
@@ -477,7 +548,91 @@ namespace :overture_maps do
         exit 1
       end
 
-      # Import each theme in sequence
+      parsed = parse_location(location)
+
+      # If it's a name (not coordinates), search once and get bbox
+      if parsed[:type] == :division_name
+        puts "Searching for: #{parsed[:name]}"
+        puts
+
+        # Check for existing local files first
+        local_files = {}
+        %w[places buildings addresses].each do |theme|
+          local_file = check_local_file(theme, parsed[:name])
+          local_files[theme] = local_file if local_file
+        end
+
+        if local_files.any?
+          puts "Found local files:"
+          local_files.each do |theme, file|
+            size_mb = (File.size(file) / (1024.0 * 1024)).round(2)
+            puts "  #{theme}: #{file} (#{size_mb} MB)"
+          end
+          puts
+          puts "Import from local files? (y/n/download)"
+          puts "  y        - Import from local files (faster)"
+          puts "  n        - Cancel"
+          puts "  download - Download fresh data from S3 (may be newer)"
+          puts
+          print "Enter choice: "
+
+          choice = $stdin.gets&.strip&.downcase
+
+          case choice
+          when 'y', 'yes'
+            # Import from local files
+            local_files.each do |theme, file|
+              puts "\nImporting #{theme} from local file..."
+              case theme
+              when 'places'
+                import_from_local_file(
+                  theme: theme,
+                  model_class: OverturePlace,
+                  local_file: file
+                )
+              when 'buildings'
+                import_from_local_file(
+                  theme: theme,
+                  model_class: OvertureBuilding,
+                  local_file: file
+                )
+              when 'addresses'
+                import_from_local_file(
+                  theme: theme,
+                  model_class: OvertureAddress,
+                  local_file: file
+                )
+              end
+            end
+            puts "\nAll imports complete!"
+            exit 0
+          when 'cancel', 'n', 'no', 'q', 'quit', nil
+            puts "Cancelled."
+            exit 0
+          when 'download'
+            puts "Downloading fresh data..."
+            # Continue to division search
+          end
+        end
+
+        # Search for division once
+        division = search_and_select_division(parsed[:name])
+
+        bbox = division[:bbox]
+        unless bbox
+          puts "Error: Could not get bounding box for '#{division[:name]}'"
+          exit 1
+        end
+
+        puts "Using bounding box: #{bbox['ymin']}, #{bbox['xmin']} to #{bbox['ymax']}, #{bbox['xmax']}"
+        puts
+
+        # Convert to bbox string for passing to tasks, including display name for local file checking
+        display_name = division[:name].downcase.gsub(/[^a-z0-9]+/, '_').gsub(/^_+|_+$/, '')
+        location = "#{bbox['ymin']},#{bbox['xmin']},#{bbox['ymax']},#{bbox['xmax']}|#{display_name}"
+      end
+
+      # Import each theme in sequence (now using coordinates, not name)
       %w[places buildings addresses].each do |theme|
         puts "=" * 60
         puts "Importing #{theme}..."

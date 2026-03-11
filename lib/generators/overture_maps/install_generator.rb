@@ -27,6 +27,15 @@ module OvertureMaps
 
         # Create addresses migration
         copy_file "address_migration.rb.tt", "db/migrate/#{timestamp.succ.succ.succ.succ}_create_overture_addresses.rb"
+
+        # Create base features migration
+        copy_file "base_feature_migration.rb.tt", "db/migrate/#{timestamp.succ.succ.succ.succ.succ}_create_overture_base_features.rb"
+
+        # Create divisions migration
+        copy_file "division_migration.rb.tt", "db/migrate/#{timestamp.succ.succ.succ.succ.succ.succ}_create_overture_divisions.rb"
+
+        # Create transportation migration
+        copy_file "transportation_migration.rb.tt", "db/migrate/#{timestamp.succ.succ.succ.succ.succ.succ.succ}_create_overture_transportations.rb"
       end
 
       def create_models
@@ -36,6 +45,9 @@ module OvertureMaps
         copy_file "place_model.rb.tt", "app/models/overture_place.rb"
         copy_file "building_model.rb.tt", "app/models/overture_building.rb"
         copy_file "address_model.rb.tt", "app/models/overture_address.rb"
+        copy_file "base_feature_model.rb.tt", "app/models/overture_base_feature.rb"
+        copy_file "division_model.rb.tt", "app/models/overture_division.rb"
+        copy_file "transportation_model.rb.tt", "app/models/overture_transportation.rb"
       end
     end
   end

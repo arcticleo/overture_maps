@@ -196,6 +196,8 @@ def import_from_bbox(theme:, model_class:, min_lat:, max_lat:, min_lng:, max_lng
 
     # Process records in batches to avoid memory issues
     batch_number = 0
+    type_imported = 0
+    type_errors = 0
 
     OvertureMaps::Import::ParquetReader.stream_s3_with_bbox(
       theme: theme,
@@ -215,16 +217,18 @@ def import_from_bbox(theme:, model_class:, min_lat:, max_lat:, min_lng:, max_lng
 
       runner.import_from_records(batch, filter: filter)
 
+      type_imported += runner.imported_count
+      type_errors += runner.error_count
       total_imported += runner.imported_count
       total_errors += runner.error_count
       all_errors.concat(runner.errors)
 
       if batch_number % 2 == 0 || batch.length < 50000
-        puts "  Batch #{batch_number}: imported #{total_imported} so far (#{total_errors} errors)"
+        puts "  Batch #{batch_number}: imported #{type_imported} so far (#{type_errors} errors)"
       end
     end
 
-    puts "  Streaming import complete: #{total_imported} imported, #{total_errors} errors"
+    puts "  Streaming import complete: #{type_imported} imported, #{type_errors} errors"
 
     if all_errors.any? && ENV["VERBOSE"]
       puts "\n  Error details:"
@@ -544,6 +548,210 @@ namespace :overture_maps do
       end
     end
 
+    desc "Import base features from Overture Maps (by location name or bounding box)"
+    task :base, [:location] => :environment do |_t, args|
+      location = args[:location]
+
+      model_class = require_model("OvertureBaseFeature")
+
+      if location.nil?
+        puts "Error: Missing location argument"
+        puts
+        puts "Usage:"
+        puts "  rails overture_maps:import:base_features[Seattle]"
+        puts "  rails overture_maps:import:base_features[47.606,-122.336,47.609,-122.333]"
+        exit 1
+      end
+
+      parsed = parse_location(location)
+
+      if parsed[:type] == :bbox
+        import_from_bbox(
+          theme: "base",
+          model_class: model_class,
+          min_lat: parsed[:min_lat],
+          max_lat: parsed[:max_lat],
+          min_lng: parsed[:min_lng],
+          max_lng: parsed[:max_lng]
+        )
+      else
+        location_name = parsed[:display_name] || parsed[:name]
+        local_file = check_local_file("base", location_name)
+
+        if local_file
+          choice = prompt_for_local_file(local_file)
+
+          case choice
+          when :local
+            import_from_local_file(
+              theme: "base",
+              model_class: model_class,
+              local_file: local_file
+            )
+            next
+          when :cancel
+            puts "Cancelled."
+            exit 0
+          when :download
+            puts "Downloading fresh data..."
+          end
+        end
+
+        division = search_and_select_division(parsed[:name] || location_name)
+
+        bbox = division[:bbox]
+        unless bbox
+          puts "Error: Could not get bounding box for '#{division[:name]}'"
+          exit 1
+        end
+
+        import_from_bbox(
+          theme: "base",
+          model_class: model_class,
+          min_lat: bbox["ymin"],
+          max_lat: bbox["ymax"],
+          min_lng: bbox["xmin"],
+          max_lng: bbox["xmax"]
+        )
+      end
+    end
+
+    desc "Import divisions from Overture Maps (by location name or bounding box)"
+    task :divisions, [:location] => :environment do |_t, args|
+      location = args[:location]
+
+      model_class = require_model("OvertureDivision")
+
+      if location.nil?
+        puts "Error: Missing location argument"
+        puts
+        puts "Usage:"
+        puts "  rails overture_maps:import:divisions[Seattle]"
+        puts "  rails overture_maps:import:divisions[47.606,-122.336,47.609,-122.333]"
+        exit 1
+      end
+
+      parsed = parse_location(location)
+
+      if parsed[:type] == :bbox
+        import_from_bbox(
+          theme: "divisions",
+          model_class: model_class,
+          min_lat: parsed[:min_lat],
+          max_lat: parsed[:max_lat],
+          min_lng: parsed[:min_lng],
+          max_lng: parsed[:max_lng]
+        )
+      else
+        location_name = parsed[:display_name] || parsed[:name]
+        local_file = check_local_file("divisions", location_name)
+
+        if local_file
+          choice = prompt_for_local_file(local_file)
+
+          case choice
+          when :local
+            import_from_local_file(
+              theme: "divisions",
+              model_class: model_class,
+              local_file: local_file
+            )
+            next
+          when :cancel
+            puts "Cancelled."
+            exit 0
+          when :download
+            puts "Downloading fresh data..."
+          end
+        end
+
+        division = search_and_select_division(parsed[:name] || location_name)
+
+        bbox = division[:bbox]
+        unless bbox
+          puts "Error: Could not get bounding box for '#{division[:name]}'"
+          exit 1
+        end
+
+        import_from_bbox(
+          theme: "divisions",
+          model_class: model_class,
+          min_lat: bbox["ymin"],
+          max_lat: bbox["ymax"],
+          min_lng: bbox["xmin"],
+          max_lng: bbox["xmax"]
+        )
+      end
+    end
+
+    desc "Import transportation from Overture Maps (by location name or bounding box)"
+    task :transportation, [:location] => :environment do |_t, args|
+      location = args[:location]
+
+      model_class = require_model("OvertureTransportation")
+
+      if location.nil?
+        puts "Error: Missing location argument"
+        puts
+        puts "Usage:"
+        puts "  rails overture_maps:import:transportation[Seattle]"
+        puts "  rails overture_maps:import:transportation[47.606,-122.336,47.609,-122.333]"
+        exit 1
+      end
+
+      parsed = parse_location(location)
+
+      if parsed[:type] == :bbox
+        import_from_bbox(
+          theme: "transportation",
+          model_class: model_class,
+          min_lat: parsed[:min_lat],
+          max_lat: parsed[:max_lat],
+          min_lng: parsed[:min_lng],
+          max_lng: parsed[:max_lng]
+        )
+      else
+        location_name = parsed[:display_name] || parsed[:name]
+        local_file = check_local_file("transportation", location_name)
+
+        if local_file
+          choice = prompt_for_local_file(local_file)
+
+          case choice
+          when :local
+            import_from_local_file(
+              theme: "transportation",
+              model_class: model_class,
+              local_file: local_file
+            )
+            next
+          when :cancel
+            puts "Cancelled."
+            exit 0
+          when :download
+            puts "Downloading fresh data..."
+          end
+        end
+
+        division = search_and_select_division(parsed[:name] || location_name)
+
+        bbox = division[:bbox]
+        unless bbox
+          puts "Error: Could not get bounding box for '#{division[:name]}'"
+          exit 1
+        end
+
+        import_from_bbox(
+          theme: "transportation",
+          model_class: model_class,
+          min_lat: bbox["ymin"],
+          max_lat: bbox["ymax"],
+          min_lng: bbox["xmin"],
+          max_lng: bbox["xmax"]
+        )
+      end
+    end
+
     desc "Import all themes for a location"
     task :all, [:location] => :environment do |_t, args|
       location = args[:location]
@@ -566,7 +774,7 @@ namespace :overture_maps do
 
         # Check for existing local files first
         local_files = {}
-        %w[places buildings addresses].each do |theme|
+        %w[places buildings addresses base divisions transportation].each do |theme|
           local_file = check_local_file(theme, parsed[:name])
           local_files[theme] = local_file if local_file
         end
@@ -611,6 +819,24 @@ namespace :overture_maps do
                   model_class: OvertureAddress,
                   local_file: file
                 )
+              when 'base'
+                import_from_local_file(
+                  theme: theme,
+                  model_class: OvertureBaseFeature,
+                  local_file: file
+                )
+              when 'divisions'
+                import_from_local_file(
+                  theme: theme,
+                  model_class: OvertureDivision,
+                  local_file: file
+                )
+              when 'transportation'
+                import_from_local_file(
+                  theme: theme,
+                  model_class: OvertureTransportation,
+                  local_file: file
+                )
               end
             end
             puts "\nAll imports complete!"
@@ -642,7 +868,7 @@ namespace :overture_maps do
       end
 
       # Import each theme in sequence (now using coordinates, not name)
-      %w[places buildings addresses].each do |theme|
+      %w[places buildings addresses base divisions transportation].each do |theme|
         puts "=" * 60
         puts "Importing #{theme}..."
         puts "=" * 60
@@ -661,9 +887,12 @@ namespace :overture_maps do
     desc "Show import statistics"
     task :stats => :environment do |_t, _args|
       puts "Import Statistics:"
-      puts "  Places:     #{OverturePlace.count rescue 'N/A (run `rails generate overture_maps:install` and `rails db:migrate`)'}"
-      puts "  Buildings:  #{OvertureBuilding.count rescue 'N/A'}"
-      puts "  Addresses:  #{OvertureAddress.count rescue 'N/A'}"
+      puts "  Places:        #{OverturePlace.count rescue 'N/A (run `rails generate overture_maps:install` and `rails db:migrate`)'}"
+      puts "  Buildings:     #{OvertureBuilding.count rescue 'N/A'}"
+      puts "  Addresses:     #{OvertureAddress.count rescue 'N/A'}"
+      puts "  Base Features: #{OvertureBaseFeature.count rescue 'N/A'}"
+      puts "  Divisions:     #{OvertureDivision.count rescue 'N/A'}"
+      puts "  Transportation: #{OvertureTransportation.count rescue 'N/A'}"
     end
 
     desc "List available versions"

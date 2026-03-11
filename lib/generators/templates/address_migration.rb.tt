@@ -4,10 +4,13 @@ class CreateOvertureAddresses < ActiveRecord::Migration[8.0]
   def change
     create_table :overture_addresses, id: :string, primary_key: :id do |t|
       t.string :street
+      t.string :number
+      t.string :unit
       t.string :locality
       t.string :region
       t.string :country
       t.string :postcode
+      t.jsonb :address_levels, default: []
       t.timestamps
     end
 

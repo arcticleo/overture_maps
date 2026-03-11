@@ -96,16 +96,16 @@ module OvertureMaps
       def flush_records(records)
         return if records.empty?
 
+        # Get valid column names for this model
+        valid_columns = model_class.column_names.map(&:to_sym)
+
         # Deduplicate records by ID (keep last occurrence)
         deduped = records.reverse.uniq { |r| r[:id] || r["id"] }.reverse
         duplicates_count = records.length - deduped.length
 
-        # Normalize records to all have the same keys (required for upsert_all)
-        all_keys = deduped.flat_map(&:keys).uniq
+        # Filter records to only include valid columns, then normalize
         normalized = deduped.map do |record|
-          all_keys.each_with_object({}) do |key, hash|
-            hash[key] = record.fetch(key, nil)
-          end
+          record.slice(*valid_columns)
         end
 
         # Use upsert_all to handle duplicate keys (update existing records)
@@ -190,6 +190,50 @@ module OvertureMaps
         attrs[:postal_city] = record["postal_city"]
         attrs[:postcode] = record["postcode"]
         attrs[:address_levels] = record["address_levels"]
+
+        # Base theme fields
+        attrs[:subtype] = record["subtype"]
+        attrs[:class] = record["class"]
+        attrs[:height] = record["height"]
+        attrs[:surface] = record["surface"]
+        attrs[:depth] = record["depth"]
+        attrs[:level] = record["level"]
+        attrs[:is_salt] = record["is_salt"]
+        attrs[:is_intermittent] = record["is_intermittent"]
+        attrs[:elevation] = record["elevation"]
+        attrs[:wikidata] = record["wikidata"]
+        attrs[:cartography] = record["cartography"]
+        attrs[:source_tags] = record["source_tags"]
+
+        # Division theme fields
+        attrs[:division_id] = record["division_id"]
+        attrs[:parent_division_id] = record["parent_division_id"]
+        attrs[:population] = record["population"]
+        attrs[:is_land] = record["is_land"]
+        attrs[:is_territorial] = record["is_territorial"]
+        attrs[:is_disputed] = record["is_disputed"]
+        attrs[:admin_level] = record["admin_level"]
+        attrs[:local_type] = record["local_type"]
+        attrs[:hierarchies] = record["hierarchies"]
+        attrs[:perspectives] = record["perspectives"]
+        attrs[:norms] = record["norms"]
+        attrs[:capital_division_ids] = record["capital_division_ids"]
+        attrs[:capital_of_divisions] = record["capital_of_divisions"]
+
+        # Transportation theme fields
+        attrs[:subclass] = record["subclass"]
+        attrs[:connectors] = record["connectors"]
+        attrs[:routes] = record["routes"]
+        attrs[:speed_limits] = record["speed_limits"]
+        attrs[:access_restrictions] = record["access_restrictions"]
+        attrs[:road_surface] = record["road_surface"]
+        attrs[:road_flags] = record["road_flags"]
+        attrs[:rail_flags] = record["rail_flags"]
+        attrs[:width_rules] = record["width_rules"]
+        attrs[:level_rules] = record["level_rules"]
+        attrs[:destinations] = record["destinations"]
+        attrs[:subclass_rules] = record["subclass_rules"]
+        attrs[:prohibited_transitions] = record["prohibited_transitions"]
 
         attrs.compact
       end

@@ -522,13 +522,9 @@ module OvertureMaps
           "id, names, height, level, class, is_underground, geometry"
         when "addresses"
           "*"
-        when "divisions"
-          "*"
-        when "base"
-          "*"
-        when "transportation"
-          "*"
         else
+          # For complex themes (base, divisions, transportation), select all columns
+          # These themes have varying schemas across different types
           "*"
         end
 

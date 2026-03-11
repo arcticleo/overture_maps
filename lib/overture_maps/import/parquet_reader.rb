@@ -111,13 +111,9 @@ module OvertureMaps
           "id, names, height, level, class, is_underground, geometry"
         when "addresses"
           "id, geometry, street, number, unit, postal_city, postcode, country, address_levels"
-        when "divisions"
-          "id, geometry, names, country, region"
-        when "base"
-          "id, geometry, class, subclass"
-        when "transportation"
-          "id, geometry, class, subclass, network"
         else
+          # For complex themes (base, divisions, transportation), select all columns
+          # These themes have varying schemas across different types
           "*"
         end
 
@@ -203,13 +199,9 @@ module OvertureMaps
           "id, names, height, level, class, is_underground, geometry::JSON as geometry"
         when "addresses"
           "id, geometry, street, number, unit, postal_city, postcode, country, address_levels"
-        when "divisions"
-          "*"
-        when "base"
-          "*"
-        when "transportation"
-          "*"
         else
+          # For complex themes (base, divisions, transportation), select all columns
+          # These themes have varying schemas across different types
           "*"
         end
       end
@@ -228,13 +220,9 @@ module OvertureMaps
           "id, names, height, level, class, is_underground, geometry"
         when "addresses"
           "id, geometry, street, number, unit, postal_city, postcode, country, address_levels"
-        when "divisions"
-          "id, geometry, names, country, region"
-        when "base"
-          "id, geometry, class, subclass"
-        when "transportation"
-          "id, geometry, class, subclass, network"
         else
+          # For complex themes (base, divisions, transportation), select all columns
+          # These themes have varying schemas across different types
           "*"
         end
 

@@ -148,9 +148,10 @@ module OvertureMaps
         puts "  n - Cancel"
         puts "  d - Download fresh data from S3 (may be newer)"
         puts
-        print "Enter choice: "
+        print "Enter choice (y): "
 
         choice = $stdin.gets&.strip&.downcase
+        choice = 'y' if choice.nil? || choice.empty?
 
         case choice
         when 'y', 'yes'

@@ -62,16 +62,17 @@ def prompt_for_local_file(local_file)
   puts "  n        - Cancel"
   puts "  d        - Download fresh data from S3 (may be newer)"
   puts
-  print "Enter choice: "
+  print "Enter choice (y): "
 
   choice = $stdin.gets&.strip&.downcase
+  choice = 'y' if choice.nil? || choice.empty?
 
   case choice
   when 'y', 'yes'
     :local
   when 'download', 'd'
     :download
-  when 'n', 'no', 'q', 'quit', nil
+  when 'n', 'no', 'q', 'quit'
     :cancel
   else
     puts "Invalid choice. Cancelling."
@@ -108,11 +109,12 @@ def search_and_select_division(name)
       puts "  #{i + 1}. #{r[:name]} (#{r[:subtype]}) - #{location_info}#{area_info}"
     end
     puts
-    print "Enter number to select (or 'q' to quit): "
+    print "Enter number to select (1-#{results.count}, or 'q' to quit): "
 
     input = $stdin.gets&.strip
+    input = '1' if input.nil? || input.empty?
 
-    if input == 'q' || input.nil?
+    if input == 'q'
       puts "Cancelled."
       exit 0
     end

@@ -77,21 +77,25 @@ module OvertureMaps
       end
 
       def select_division(results)
-        if results.count == 1
-          result = results.first
+        # Filter out small areas (less than 1 km²)
+        filtered = results.select { |r| r[:area_km2].nil? || r[:area_km2] >= 1.0 }
+        filtered = results if filtered.empty?
+
+        if filtered.count == 1
+          result = filtered.first
           location_info = [result[:country], result[:region]].compact.join(" / ")
           puts "Found: #{result[:name]} (#{result[:subtype]})"
           puts "  Location: #{location_info}" unless location_info.empty?
           result
         else
           puts "Multiple matches found:"
-          results.each_with_index do |r, i|
+          filtered.each_with_index do |r, i|
             location_info = [r[:country], r[:region]].compact.join(" / ")
             area_info = r[:area_km2] && r[:area_km2] > 0 ? " (#{r[:area_km2]} km²)" : ""
             puts "  #{i + 1}. #{r[:name]} (#{r[:subtype]}) - #{location_info}#{area_info}"
           end
           puts
-          print "Enter number to select (or 'q' to quit): "
+          print "Enter number to select (1-#{filtered.count}, or 'q' to quit): "
           input = $stdin.gets&.strip
 
           if input == 'q' || input.nil?
@@ -100,7 +104,7 @@ module OvertureMaps
           end
 
           idx = input.to_i - 1
-          unless idx >= 0 && idx < results.count
+          unless idx >= 0 && idx < filtered.count
             puts "Invalid selection."
             exit 1
           end

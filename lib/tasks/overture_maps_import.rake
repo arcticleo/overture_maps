@@ -102,11 +102,18 @@ def search_and_select_division(name)
     puts "  Area: #{result[:area_km2]} km²" if result[:area_km2] && result[:area_km2] > 0
     result
   else
+    # Filter to only show divisions >= 1 km²
+    filtered = results.select { |r| r[:area_km2] && r[:area_km2] >= 1.0 }
+
+    if filtered.empty?
+      puts "No divisions found with area >= 1 km². Showing all results:"
+      filtered = results
+    end
+
     puts "Multiple matches found:"
-    results.each_with_index do |r, i|
+    filtered.each_with_index do |r, i|
       location_info = [r[:country], r[:region]].compact.join(" / ")
-      area_info = r[:area_km2] && r[:area_km2] > 0 ? " (#{r[:area_km2]} km²)" : ""
-      puts "  #{i + 1}. #{r[:name]} (#{r[:subtype]}) - #{location_info}#{area_info}"
+      puts "  #{i + 1}. #{r[:name]} (#{r[:subtype]}) - #{location_info} (#{r[:area_km2]} km²)"
     end
     puts
     print "Enter number to select (1-#{results.count}, or 'q' to quit): "

@@ -57,10 +57,10 @@ def prompt_for_local_file(local_file)
 
   puts "Found local file: #{local_file} (#{size_mb} MB)"
   puts
-  puts "Import from this file? (y/n/download)"
+  puts "Import from this file? (y/n/d)"
   puts "  y        - Import from local file (faster)"
   puts "  n        - Cancel"
-  puts "  download - Download fresh data from S3 (may be newer)"
+  puts "  d        - Download fresh data from S3 (may be newer)"
   puts
   print "Enter choice: "
 
@@ -569,10 +569,10 @@ namespace :overture_maps do
             puts "  #{theme}: #{file} (#{size_mb} MB)"
           end
           puts
-          puts "Import from local files? (y/n/download)"
+          puts "Import from local files? (y/n/d)"
           puts "  y        - Import from local files (faster)"
           puts "  n        - Cancel"
-          puts "  download - Download fresh data from S3 (may be newer)"
+          puts "  d        - Download fresh data from S3 (may be newer)"
           puts
           print "Enter choice: "
 

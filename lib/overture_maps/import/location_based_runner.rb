@@ -143,10 +143,10 @@ module OvertureMaps
 
         puts "Found local file: #{local_file} (#{size_mb} MB)"
         puts
-        puts "Import from this file? (y/n/download)"
-        puts "  y        - Import from local file (faster)"
-        puts "  n        - Cancel"
-        puts "  download - Download fresh data from S3 (may be newer)"
+        puts "Import from this file? (y/n/d)"
+        puts "  y - Import from local file (faster)"
+        puts "  n - Cancel"
+        puts "  d - Download fresh data from S3 (may be newer)"
         puts
         print "Enter choice: "
 
@@ -156,7 +156,7 @@ module OvertureMaps
         when 'y', 'yes'
           puts "Importing from local file..."
           import_from_local_file(local_file)
-        when 'download', 'd'
+        when 'd', 'download'
           puts "Downloading fresh data from S3..."
           # Delete the old file and re-download
           File.delete(local_file)

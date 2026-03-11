@@ -732,7 +732,9 @@ namespace :overture_maps do
         name = row[0]&.strip
         taxonomy_str = row[1]&.strip
 
+        # Skip header row and invalid data
         next if name.nil? || name.empty?
+        next if name == "Category code" || name.downcase.include?("category")
 
         taxonomy = taxonomy_str.gsub(/[\[\]]/, "").split(",").map(&:strip)
         primary = taxonomy.first

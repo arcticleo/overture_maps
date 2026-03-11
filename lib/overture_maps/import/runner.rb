@@ -185,14 +185,16 @@ module OvertureMaps
 
         # Address fields (for address theme)
         attrs[:street] = record["street"]
-        attrs[:locality] = record["locality"]
-        attrs[:region] = record["region"]
+        attrs[:number] = record["number"]
+        attrs[:unit] = record["unit"]
+        attrs[:postal_city] = record["postal_city"]
         attrs[:postcode] = record["postcode"]
+        attrs[:address_levels] = record["address_levels"]
 
         attrs.compact
       end
 
-      # Parse geometry from WKB or GeoJSON
+      # Parse geometry from WKB (binary, hex, or JSON-escaped), WKT, or GeoJSON
       def parse_geometry(geom)
         return nil unless geom
 
@@ -200,12 +202,64 @@ module OvertureMaps
 
         case geom
         when String
-          # Try as WKB hex string
+          # Check if it's JSON-escaped binary (from DuckDB JSON output)
+          # Format: "\x00\x00\x00..." which contains literal backslash-x sequences
+          if geom.include?("\\x")
+            begin
+              # Parse the escape sequences: \xNN becomes actual byte with value NN
+              hex_pairs = []
+              i = 0
+              while i < geom.length
+                if geom[i] == '\\' && i + 1 < geom.length && geom[i+1] == 'x'
+                  # This is \x - the next two chars are hex
+                  if i + 3 < geom.length
+                    hex_pairs << geom[i+2..i+3]
+                    i += 4
+                  else
+                    i += 1
+                  end
+                else
+                  # Regular char - convert to hex
+                  hex_pairs << geom[i].ord.to_s(16).rjust(2, '0')
+                  i += 1
+                end
+              end
+
+              hex_string = hex_pairs.join
+              return factory.parse_wkb(hex_string)
+            rescue RGeo::Error
+              # Fall through to other formats
+            end
+          end
+
+          # Check if it's binary WKB (starts with 01 or 00 for endian marker)
+          if geom.bytesize >= 5 && geom[0..1].match?(/\A[01]\x00/)
+            begin
+              return factory.parse_wkb(geom.unpack1("H*"))
+            rescue RGeo::Error
+              # Fall through
+            end
+          end
+
+          # Try as hex WKB string
           begin
-            factory.parse_wkb(geom)
+            return factory.parse_wkb(geom)
           rescue RGeo::Error
-            # Try as GeoJSON
-            RGeo::GeoJSON.decode(geom, geo_factory: factory)
+            # Fall through
+          end
+
+          # Try as WKT
+          begin
+            return RGeo::WKRep::WKTParser.new(factory).parse(geom)
+          rescue RGeo::Error
+            # Fall through
+          end
+
+          # Try as GeoJSON
+          begin
+            return RGeo::GeoJSON.decode(geom, geo_factory: factory)
+          rescue RGeo::Error
+            nil
           end
         when Hash
           RGeo::GeoJSON.decode(geom, geo_factory: factory)

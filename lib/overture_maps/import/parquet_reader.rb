@@ -106,17 +106,17 @@ module OvertureMaps
 
         columns = case theme
         when "places"
-          "*"
+          "id, geometry, names, categories, addresses, confidence"
         when "buildings"
           "id, names, height, level, class, is_underground, geometry"
         when "addresses"
-          "*"
+          "id, geometry, street, number, unit, postal_city, postcode, country, address_levels"
         when "divisions"
-          "*"
+          "id, geometry, names, country, region"
         when "base"
-          "*"
+          "id, geometry, class, subclass"
         when "transportation"
-          "*"
+          "id, geometry, class, subclass, network"
         else
           "*"
         end
@@ -194,22 +194,15 @@ module OvertureMaps
         nil
       end
 
-      # Stream records from S3 with spatial filtering using DuckDB
-      # Yields each record for memory-efficient processing - writes to temp file and streams
-      def self.stream_s3_with_bbox(theme:, type:, min_lat:, max_lat:, min_lng:, max_lng:, version: nil, batch_size: 1000, &block)
-        require "tempfile"
-        require "open3"
-        require "json"
-
-        Downloader.ensure_duckdb_cli!
-
-        columns = case theme
+      def self.columns_for_theme(theme)
+        case theme
         when "places"
-          "*"
+          # Convert geometry to GeoJSON text
+          "id, names, confidence, geometry::JSON as geometry, categories, brand, addresses"
         when "buildings"
-          "id, names, height, level, class, is_underground, geometry"
+          "id, names, height, level, class, is_underground, geometry::JSON as geometry"
         when "addresses"
-          "*"
+          "id, geometry, street, number, unit, postal_city, postcode, country, address_levels"
         when "divisions"
           "*"
         when "base"
@@ -219,7 +212,33 @@ module OvertureMaps
         else
           "*"
         end
+      end
 
+      def self.stream_s3_with_bbox(theme:, type:, min_lat:, max_lat:, min_lng:, max_lng:, version: nil, batch_size: 1000, &block)
+        require "tempfile"
+        require "open3"
+        require "json"
+
+        Downloader.ensure_duckdb_cli!
+
+        columns = case theme
+        when "places"
+          "id, geometry, names, categories, addresses, confidence"
+        when "buildings"
+          "id, names, height, level, class, is_underground, geometry"
+        when "addresses"
+          "id, geometry, street, number, unit, postal_city, postcode, country, address_levels"
+        when "divisions"
+          "id, geometry, names, country, region"
+        when "base"
+          "id, geometry, class, subclass"
+        when "transportation"
+          "id, geometry, class, subclass, network"
+        else
+          "*"
+        end
+
+        # Use JSONLines format (one JSON object per line) for streaming
         sql = <<~SQL.squish
           INSTALL spatial;
           LOAD spatial;
@@ -235,7 +254,7 @@ module OvertureMaps
               AND bbox.ymax <= #{max_lat}
             QUALIFY ROW_NUMBER() OVER (PARTITION BY id ORDER BY version DESC) = 1
             ORDER BY id
-          ) TO '/dev/stdout' WITH (FORMAT JSON, ARRAY true)
+          ) TO '/dev/stdout' WITH (FORMAT JSON, ARRAY false)
         SQL
 
         # Write SQL to temp file
@@ -243,132 +262,44 @@ module OvertureMaps
         sql_file.write(sql)
         sql_file.close
 
-        # Run DuckDB and stream output
+        # Run DuckDB and stream output line by line (JSONLines format)
         cmd = "#{Downloader.duckdb_cli_path} < #{sql_file.path} 2>&1"
 
         batch = []
+        record_count = 0
         Downloader.ensure_duckdb_cli!
 
         IO.popen(cmd, "r") do |io|
-          # DuckDB outputs a JSON array, we need to parse it line by line or as a stream
-          # For large results, we'll use a streaming JSON parser
-          content = io.read
+          io.each_line do |line|
+            line = line.strip
+            next if line.empty?
 
-          # Clean up temp file
-          sql_file.unlink
-
-          # Parse the JSON array
-          begin
-            records = JSON.parse(content)
-            records.each do |record|
+            begin
+              record = JSON.parse(line)
               batch << record
+              record_count += 1
+
               if batch.length >= batch_size
-                yield_batch(batch, &block)
+                yield batch
                 batch = []
+                puts "  Streamed #{record_count} records..." if record_count % 50000 == 0
               end
+            rescue JSON::ParserError => e
+              # Skip malformed lines
+              puts "  Warning: Skipping malformed JSON line: #{line[0..50]}..."
             end
-          rescue JSON::ParserError => e
-            # If JSON is malformed, it might be a huge single array - try streaming parser
-            puts "Warning: Large JSON result, using streaming parser..."
-            yield_from_streaming_json(content, batch_size, &block)
-            return
           end
         end
+
+        # Clean up temp file
+        sql_file.unlink
 
         # Yield remaining records
-        yield_batch(batch, &block) if batch.any?
+        yield batch if batch.any?
+        puts "  Streamed #{record_count} total records" if record_count > 0
       end
 
-      def self.yield_batch(batch)
-        return if batch.empty?
-        yield batch
-      end
-
-      def self.yield_from_streaming_json(content, batch_size)
-        # For very large results, parse JSON incrementally
-        # This handles the case where JSON is too large to parse at once
-        records = []
-        depth = 0
-        in_string = false
-        escape = false
-        buffer = String.new
-
-        content.each_char do |char|
-          if escape
-            buffer << char
-            escape = false
-            next
-          end
-
-          if char == '\\'
-            buffer << char
-            escape = true
-            next
-          end
-
-          if char == '"' && !in_string
-            in_string = true
-            buffer << char
-            next
-          end
-
-          if char == '"' && in_string
-            in_string = false
-            buffer << char
-            next
-          end
-
-          if in_string
-            buffer << char
-            next
-          end
-
-          case char
-          when '['
-            depth += 1
-            if depth == 2
-              # Start of an object inside the array
-              buffer = String.new
-            end
-          when ']'
-            depth -= 1
-            if depth == 1 && !buffer.empty?
-              # End of an object
-              begin
-                records << JSON.parse(buffer)
-                if records.length >= batch_size
-                  yield records
-                  records = []
-                end
-              rescue JSON::ParserError
-                # Skip malformed objects
-              end
-              buffer = String.new
-            end
-          when ','
-            if depth == 2 && !buffer.empty?
-              # End of an object
-              begin
-                records << JSON.parse(buffer)
-                if records.length >= batch_size
-                  yield records
-                  records = []
-                end
-              rescue JSON::ParserError
-                # Skip malformed objects
-              end
-              buffer = String.new
-            elsif depth > 1
-              buffer << char
-            end
-          else
-            buffer << char if depth > 1
-          end
-        end
-
-        yield records if records.any?
-      end
-      private_class_method :yield_batch, :yield_from_streaming_json
+      # Removed old streaming JSON parser - now using JSONLines format with line-by-line parsing
     end
   end
 end

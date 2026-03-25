@@ -769,9 +769,6 @@ namespace :overture_maps do
 
       # If it's a name (not coordinates), search once and get bbox
       if parsed[:type] == :division_name
-        puts "Searching for: #{parsed[:name]}"
-        puts
-
         # Check for existing local files first
         local_files = {}
         %w[places buildings addresses base divisions transportation].each do |theme|

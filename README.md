@@ -47,11 +47,14 @@ rails generate overture_maps:install
 
 This creates:
 - Migration to enable the PostGIS extension
+- Migration for `overture_categories` table
 - Migration for `overture_places` table
 - Migration for `overture_buildings` table
 - Migration for `overture_addresses` table
-- Migration for `overture_categories` table
-- Model files
+- Migration for `overture_base_features` table
+- Migration for `overture_divisions` table
+- Migration for `overture_transportations` table
+- Model files for all themes
 
 Then run migrations:
 
@@ -80,13 +83,8 @@ rails overture_maps:categories:primary
 ### Generate Individual Models
 
 ```bash
-# Generate Place model
 rails generate overture_maps:place
-
-# Generate Building model
 rails generate overture_maps:building
-
-# Generate Address model
 rails generate overture_maps:address
 ```
 
@@ -141,11 +139,14 @@ rails overture_maps:import:places[Seattle,"eat_and_drink,shopping"]
 rails overture_maps:categories:primary
 ```
 
-### Import Buildings and Addresses
+### Import Other Themes
 
 ```bash
 rails overture_maps:import:buildings[Seattle]
 rails overture_maps:import:addresses[Seattle]
+rails overture_maps:import:base[Seattle]
+rails overture_maps:import:divisions[Seattle]
+rails overture_maps:import:transportation[Seattle]
 ```
 
 ### Import All Themes
@@ -382,17 +383,56 @@ OvertureBuilding.with_height
 ### Querying Addresses
 
 ```ruby
-# All addresses
-OvertureAddress.all
-
 # By country
 OvertureAddress.by_country("US")
 
-# By locality
-OvertureAddress.by_locality("San Francisco")
+# By city
+OvertureAddress.by_postal_city("San Francisco")
 
 # By postcode
 OvertureAddress.by_postcode("94102")
+```
+
+### Querying Base Features
+
+```ruby
+# By type
+OvertureBaseFeature.water
+OvertureBaseFeature.land
+OvertureBaseFeature.land_use
+OvertureBaseFeature.infrastructure
+
+# Salt or intermittent water
+OvertureBaseFeature.salt_water
+OvertureBaseFeature.intermittent
+```
+
+### Querying Divisions
+
+```ruby
+# By level
+OvertureDivision.countries
+OvertureDivision.regions
+OvertureDivision.localities
+
+# By country
+OvertureDivision.by_country("US")
+
+# Hierarchy
+division = OvertureDivision.find_by(division_id: "...")
+division.children
+division.parent
+```
+
+### Querying Transportation
+
+```ruby
+# By type
+OvertureTransportation.roads
+OvertureTransportation.rails
+
+# With speed limits
+OvertureTransportation.with_speed_limits
 ```
 
 ## Database Utilities
@@ -422,10 +462,10 @@ OvertureMaps::Database.nearest_neighbors(
 
 ## Model Scopes
 
+All models inherit `within_bounds(s, w, n, e)` and `near(lat, lng, radius)` from the base class.
+
 | Model | Scope | Description |
 |-------|-------|-------------|
-| `OverturePlace` | `within_bounds(s, w, n, e)` | Places within bounding box |
-| `OverturePlace` | `near(lat, lng, radius)` | Places near a point |
 | `OverturePlace` | `by_category(categories)` | Filter by category |
 | `OverturePlace` | `by_country(country)` | Filter by country |
 | `OverturePlace` | `by_brand(brand)` | Filter by brand |
@@ -433,9 +473,16 @@ OvertureMaps::Database.nearest_neighbors(
 | `OvertureBuilding` | `by_level(min:, max:)` | Filter by level |
 | `OvertureBuilding` | `with_height` | Only buildings with height |
 | `OvertureAddress` | `by_country(country)` | Filter by country |
-| `OvertureAddress` | `by_locality(locality)` | Filter by city |
+| `OvertureAddress` | `by_postal_city(city)` | Filter by city |
 | `OvertureAddress` | `by_region(region)` | Filter by region |
 | `OvertureAddress` | `by_postcode(postcode)` | Filter by postcode |
+| `OvertureBaseFeature` | `water`, `land`, `land_use` | Filter by subtype |
+| `OvertureBaseFeature` | `salt_water`, `intermittent` | Filter water features |
+| `OvertureDivision` | `countries`, `regions`, `localities` | Filter by level |
+| `OvertureDivision` | `by_country(country)` | Filter by country |
+| `OvertureDivision` | `children_of(parent_id)` | Child divisions |
+| `OvertureTransportation` | `roads`, `rails` | Filter by subtype |
+| `OvertureTransportation` | `with_speed_limits` | Has speed limit data |
 
 ## Requirements
 

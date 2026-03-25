@@ -251,23 +251,40 @@ module OvertureMaps
         raise Error, "AWS SDK not installed. Run: gem install aws-sdk-s3"
       end
 
-      # List available versions
-      # Since S3 is public, we try common versions that are known to work
-      def self.list_versions
-        # These are known good versions from Overture Maps releases
-        [
-          "2025-06-16",
-          "2025-03-19",
-          "2025-01-17",
-          "2024-12-18",
-          "2024-11-13"
-        ]
+      STAC_CATALOG_URL = "https://stac.overturemaps.org/catalog.json"
+
+      # Fetch the STAC catalog (cached for the process lifetime)
+      def self.stac_catalog
+        @stac_catalog ||= begin
+          require "net/http"
+          require "json"
+
+          uri = URI(STAC_CATALOG_URL)
+          JSON.parse(Net::HTTP.get(uri))
+        rescue StandardError => e
+          warn "Warning: Could not fetch STAC catalog: #{e.message}"
+          {}
+        end
       end
 
-      # Get the latest version
+      # List available versions from the STAC catalog
+      def self.list_versions
+        links = stac_catalog["links"] || []
+        links
+          .select { |l| l["rel"] == "child" }
+          .filter_map { |l| l["href"]&.match(%r{(\d{4}-\d{2}-\d{2}\.\d+)/})&.[](1) }
+          .sort
+          .reverse
+      end
+
+      # Get the latest version from the Overture STAC catalog
       def self.latest_version
-        versions = list_versions
-        versions.first if versions.any?
+        @latest_version ||= stac_catalog["latest"]
+      end
+
+      def self.reset_latest_version!
+        @stac_catalog = nil
+        @latest_version = nil
       end
 
       # Search for divisions by name

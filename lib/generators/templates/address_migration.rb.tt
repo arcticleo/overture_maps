@@ -6,7 +6,7 @@ class CreateOvertureAddresses < ActiveRecord::Migration[8.0]
       t.string :street
       t.string :number
       t.string :unit
-      t.string :locality
+      t.string :postal_city
       t.string :region
       t.string :country
       t.string :postcode
@@ -19,7 +19,7 @@ class CreateOvertureAddresses < ActiveRecord::Migration[8.0]
     add_index :overture_addresses, :geometry, using: :gist
 
     add_index :overture_addresses, :country
-    add_index :overture_addresses, :locality
+    add_index :overture_addresses, :postal_city
     add_index :overture_addresses, :postcode
   end
 end

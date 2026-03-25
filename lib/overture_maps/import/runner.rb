@@ -101,12 +101,15 @@ module OvertureMaps
 
         # Deduplicate records by ID (keep last occurrence)
         deduped = records.reverse.uniq { |r| r[:id] || r["id"] }.reverse
-        duplicates_count = records.length - deduped.length
 
-        # Filter records to only include valid columns, then normalize
+        # Filter records to only include valid columns
         normalized = deduped.map do |record|
           record.slice(*valid_columns)
         end
+
+        # Ensure all records have the same keys (upsert_all requires it)
+        all_keys = normalized.each_with_object(Set.new) { |r, s| s.merge(r.keys) }.to_a
+        normalized.each { |r| all_keys.each { |k| r[k] = nil unless r.key?(k) } }
 
         # Use upsert_all to handle duplicate keys (update existing records)
         model_class.upsert_all(
@@ -117,11 +120,10 @@ module OvertureMaps
         )
         @imported_count += deduped.length
       rescue StandardError => e
-        # Batch failed - will try individual upserts
-        @errors << { error: e.message, records: deduped.length }
+        # Batch failed - try individual upserts to identify bad records
+        @errors << { error: e.message, records: normalized.length }
 
-        # Try upserting one by one to identify bad records
-        deduped.each do |record|
+        normalized.each do |record|
           begin
             model_class.upsert(
               record,
@@ -169,8 +171,9 @@ module OvertureMaps
         # Addresses: store the list of address structs as JSONB
         attrs[:addresses] = record["addresses"] if record["addresses"]
 
-        # Extract country from first address if available
-        if record["addresses"].is_a?(Array) && record["addresses"].first
+        # Country: direct field in address theme, or extract from nested addresses
+        attrs[:country] = record["country"]
+        if attrs[:country].nil? && record["addresses"].is_a?(Array) && record["addresses"].first
           attrs[:country] = record["addresses"].first["country"]
         end
 

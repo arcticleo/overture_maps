@@ -207,7 +207,7 @@ module OvertureMaps
         total_errors = 0
 
         types_to_query.each do |type|
-          puts "Querying #{theme}/#{type} from S3..."
+          puts "Querying #{theme}/#{type} from S3 using version #{Downloader.latest_version}..."
 
           records = query_s3_for_records(theme, type, min_lat, max_lat, min_lng, max_lng)
 
@@ -242,16 +242,8 @@ module OvertureMaps
       end
 
       def query_s3_for_records(theme, type, min_lat, max_lat, min_lng, max_lng)
-        columns = case theme
-        when "places"
-          "*"
-        when "buildings"
-          "id, names, height, level, class, is_underground, geometry"
-        when "addresses"
-          "*"
-        else
-          "*"
-        end
+        # Use JSON-safe columns (geometry converted from BLOB to WKT)
+        columns = ParquetReader.columns_for_stream(theme, type)
 
         sql = <<~SQL.squish
           INSTALL spatial;
@@ -265,16 +257,7 @@ module OvertureMaps
             AND bbox.ymax < #{max_lat}
         SQL
 
-        results = Downloader.run_duckdb_sql(sql)
-
-        # Convert DuckDB JSON output to record format
-        results.map do |row|
-          # Parse geometry if it's a JSON object
-          if row["geometry"].is_a?(Hash)
-            row["geometry"] = row["geometry"].to_json
-          end
-          row
-        end
+        Downloader.run_duckdb_sql(sql)
       end
 
       def build_category_filter(categories)

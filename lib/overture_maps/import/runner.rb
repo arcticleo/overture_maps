@@ -238,7 +238,11 @@ module OvertureMaps
         attrs.compact
       end
 
-      # Parse geometry from WKB (binary, hex, or JSON-escaped), WKT, or GeoJSON
+      WKT_PREFIXES = /\A\s*(POINT|LINESTRING|POLYGON|MULTIPOINT|MULTILINESTRING|MULTIPOLYGON|GEOMETRYCOLLECTION)\s*[\(Z]/i
+
+      # Parse geometry from WKT, WKB (binary, hex, or JSON-escaped), or GeoJSON
+      # NOTE: RGeo::Error is a Module, not a class. The base exception class is
+      # RGeo::Error::RGeoError (inherits RuntimeError). We must rescue that.
       def parse_geometry(geom)
         return nil unless geom
 
@@ -246,16 +250,23 @@ module OvertureMaps
 
         case geom
         when String
+          # Try WKT first if it looks like a geometry type name
+          if geom.match?(WKT_PREFIXES)
+            begin
+              return RGeo::WKRep::WKTParser.new(factory).parse(geom)
+            rescue RGeo::Error::RGeoError
+              # Fall through
+            end
+          end
+
           # Check if it's JSON-escaped binary (from DuckDB JSON output)
           # Format: "\x00\x00\x00..." which contains literal backslash-x sequences
           if geom.include?("\\x")
             begin
-              # Parse the escape sequences: \xNN becomes actual byte with value NN
               hex_pairs = []
               i = 0
               while i < geom.length
                 if geom[i] == '\\' && i + 1 < geom.length && geom[i+1] == 'x'
-                  # This is \x - the next two chars are hex
                   if i + 3 < geom.length
                     hex_pairs << geom[i+2..i+3]
                     i += 4
@@ -263,7 +274,6 @@ module OvertureMaps
                     i += 1
                   end
                 else
-                  # Regular char - convert to hex
                   hex_pairs << geom[i].ord.to_s(16).rjust(2, '0')
                   i += 1
                 end
@@ -271,16 +281,18 @@ module OvertureMaps
 
               hex_string = hex_pairs.join
               return factory.parse_wkb(hex_string)
-            rescue RGeo::Error
-              # Fall through to other formats
+            rescue RGeo::Error::RGeoError
+              # Fall through
             end
           end
 
-          # Check if it's binary WKB (starts with 01 or 00 for endian marker)
-          if geom.bytesize >= 5 && geom[0..1].match?(/\A[01]\x00/)
+          # Check if it's binary WKB (raw bytes from Parquet)
+          # WKB starts with endian byte: 0x00 (big-endian) or 0x01 (little-endian)
+          if geom.encoding == Encoding::ASCII_8BIT ||
+             (geom.bytesize >= 5 && [0, 1].include?(geom.getbyte(0)))
             begin
               return factory.parse_wkb(geom.unpack1("H*"))
-            rescue RGeo::Error
+            rescue RGeo::Error::RGeoError
               # Fall through
             end
           end
@@ -288,25 +300,29 @@ module OvertureMaps
           # Try as hex WKB string
           begin
             return factory.parse_wkb(geom)
-          rescue RGeo::Error
+          rescue RGeo::Error::RGeoError
             # Fall through
           end
 
           # Try as WKT
           begin
             return RGeo::WKRep::WKTParser.new(factory).parse(geom)
-          rescue RGeo::Error
+          rescue RGeo::Error::RGeoError
             # Fall through
           end
 
           # Try as GeoJSON
           begin
             return RGeo::GeoJSON.decode(geom, geo_factory: factory)
-          rescue RGeo::Error
+          rescue RGeo::Error::RGeoError, JSON::ParserError
             nil
           end
         when Hash
-          RGeo::GeoJSON.decode(geom, geo_factory: factory)
+          begin
+            RGeo::GeoJSON.decode(geom, geo_factory: factory)
+          rescue RGeo::Error::RGeoError
+            nil
+          end
         else
           nil
         end

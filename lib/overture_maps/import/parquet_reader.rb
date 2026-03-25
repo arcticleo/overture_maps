@@ -104,18 +104,8 @@ module OvertureMaps
 
         Downloader.ensure_duckdb_cli!
 
-        columns = case theme
-        when "places"
-          "id, geometry, names, categories, addresses, confidence"
-        when "buildings"
-          "id, names, height, level, class, is_underground, geometry"
-        when "addresses"
-          "id, geometry, street, number, unit, postal_city, postcode, country, address_levels"
-        else
-          # For complex themes (base, divisions, transportation), select all columns
-          # These themes have varying schemas across different types
-          "*"
-        end
+        # Use JSON-safe columns (geometry converted from BLOB to WKT)
+        columns = columns_for_stream(theme, type)
 
         # Use FIRST to get distinct IDs (more memory efficient than DISTINCT ON)
         sql = <<~SQL.squish
@@ -209,24 +199,17 @@ module OvertureMaps
       def self.stream_s3_with_bbox(theme:, type:, min_lat:, max_lat:, min_lng:, max_lng:, version: nil, batch_size: 1000, &block)
         require "tempfile"
         require "open3"
-        require "json"
 
         Downloader.ensure_duckdb_cli!
 
-        columns = case theme
-        when "places"
-          "id, geometry, names, categories, addresses, confidence"
-        when "buildings"
-          "id, names, height, level, class, is_underground, geometry"
-        when "addresses"
-          "id, geometry, street, number, unit, postal_city, postcode, country, address_levels"
-        else
-          # For complex themes (base, divisions, transportation), select all columns
-          # These themes have varying schemas across different types
-          "*"
-        end
+        columns = columns_for_query(theme, type)
 
-        # Use JSONLines format (one JSON object per line) for streaming
+        # Export to temp Parquet file — avoids JSON serialization of binary geometry BLOBs
+        # which causes DuckDB segfaults on complex polygons
+        parquet_file = Tempfile.new(["overture_stream", ".parquet"])
+        parquet_path = parquet_file.path
+        parquet_file.close
+
         sql = <<~SQL.squish
           INSTALL spatial;
           LOAD spatial;
@@ -242,52 +225,75 @@ module OvertureMaps
               AND bbox.ymax <= #{max_lat}
             QUALIFY ROW_NUMBER() OVER (PARTITION BY id ORDER BY version DESC) = 1
             ORDER BY id
-          ) TO '/dev/stdout' WITH (FORMAT JSON, ARRAY false)
+          ) TO '#{parquet_path}' (FORMAT PARQUET)
         SQL
 
-        # Write SQL to temp file
-        sql_file = Tempfile.new(["overture_stream", ".sql"])
+        sql_file = Tempfile.new(["overture_query", ".sql"])
         sql_file.write(sql)
         sql_file.close
 
-        # Run DuckDB and stream output line by line (JSONLines format)
-        cmd = "#{Downloader.duckdb_cli_path} < #{sql_file.path} 2>&1"
+        stdout, stderr, status = Open3.capture3("#{Downloader.duckdb_cli_path} < #{sql_file.path}")
+        sql_file.unlink
 
-        batch = []
-        record_count = 0
-        Downloader.ensure_duckdb_cli!
-
-        IO.popen(cmd, "r") do |io|
-          io.each_line do |line|
-            line = line.strip
-            next if line.empty?
-
-            begin
-              record = JSON.parse(line)
-              batch << record
-              record_count += 1
-
-              if batch.length >= batch_size
-                yield batch
-                batch = []
-                puts "  Streamed #{record_count} records..." if record_count % 50000 == 0
-              end
-            rescue JSON::ParserError => e
-              # Skip malformed lines
-              puts "  Warning: Skipping malformed JSON line: #{line[0..50]}..."
-            end
-          end
+        unless status.success?
+          puts "  DuckDB error: #{stderr.strip}" if stderr.strip.length > 0
+          parquet_file.unlink
+          return
         end
 
-        # Clean up temp file
-        sql_file.unlink
+        # Read the temp Parquet file and yield batches
+        batch = []
+        record_count = 0
+
+        Parquet.each_row(parquet_path) do |row|
+          batch << row
+          record_count += 1
+
+          if batch.length >= batch_size
+            yield batch
+            batch = []
+            puts "  Streamed #{record_count} records..." if record_count % 50000 == 0
+          end
+        end
 
         # Yield remaining records
         yield batch if batch.any?
         puts "  Streamed #{record_count} total records" if record_count > 0
+      ensure
+        File.delete(parquet_path) if parquet_path && File.exist?(parquet_path)
       end
 
-      # Removed old streaming JSON parser - now using JSONLines format with line-by-line parsing
+      # Column list for DuckDB queries. Keeps geometry as raw BLOB (no conversion needed
+      # when outputting to Parquet). Avoids columns that don't exist in all types.
+      def self.columns_for_query(theme, type)
+        case theme
+        when "places"
+          "id, geometry, names, categories, addresses, confidence"
+        when "buildings"
+          # building_part doesn't have 'class' or 'subtype' columns
+          "id, names, height, level, is_underground, geometry"
+        when "addresses"
+          "id, geometry, street, number, unit, postal_city, postcode, country, address_levels"
+        else
+          "*"
+        end
+      end
+
+      # Build column list for JSON output (geometry converted to WKT text).
+      def self.columns_for_stream(theme, type)
+        geom = "ST_AsText(ST_GeomFromWKB(geometry)) as geometry"
+
+        case theme
+        when "places"
+          "id, #{geom}, names, categories, addresses, confidence"
+        when "buildings"
+          "id, names, height, level, is_underground, #{geom}"
+        when "addresses"
+          "id, #{geom}, street, number, unit, postal_city, postcode, country, address_levels"
+        else
+          "* EXCLUDE (geometry, bbox), #{geom}"
+        end
+      end
     end
   end
 end

@@ -172,7 +172,7 @@ def import_from_bbox(theme:, model_class:, min_lat:, max_lat:, min_lng:, max_lng
   total_errors = 0
 
   types.each do |type|
-    puts "Querying #{theme}/#{type} from S3..."
+    puts "Querying #{theme}/#{type} from S3 using version #{OvertureMaps::Import::Downloader.latest_version}..."
 
     # Get count first (more memory efficient)
     count = OvertureMaps::Import::ParquetReader.count_s3_with_bbox(

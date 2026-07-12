@@ -24,6 +24,10 @@ module OvertureMaps
       # largest to smallest.
       DIVISION_SUBTYPES = %w[country dependency region county localadmin locality borough neighborhood].freeze
 
+      # Division areas smaller than this are sliver noise in a name search
+      # (ported from the parallel main-branch work, commit 6305670).
+      MIN_SEARCH_AREA_KM2 = 1.0
+
       EXTRACT_FORMATS = {
         "parquet" => "parquet",
         "geojson" => "geojson",
@@ -171,7 +175,7 @@ module OvertureMaps
         SQL
 
         rows = QueryEngine.instance.query(sql, ["%#{query}%"] + DIVISION_SUBTYPES)
-        rows.map do |row|
+        results = rows.map do |row|
           bbox = BoundingBox.new(
             lat1: row["ymin"], lng1: row["xmin"],
             lat2: row["ymax"], lng2: row["xmax"],
@@ -187,6 +191,7 @@ module OvertureMaps
             area_km2: Util.bbox_area_km2(bbox)
           }
         end
+        results.select { |r| r[:area_km2] >= MIN_SEARCH_AREA_KM2 }
       end
 
       # Builds the bbox-filtered SELECT for one theme/type. Intersection

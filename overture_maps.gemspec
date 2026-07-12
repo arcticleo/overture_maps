@@ -34,6 +34,7 @@ Gem::Specification.new do |spec|
   spec.add_dependency "activerecord", ">= 7.0"
   spec.add_dependency "railties", ">= 7.0"
   spec.add_dependency "csv"
+  spec.add_dependency "rexml"
   spec.add_dependency "rgeo", "~> 3.0"
   spec.add_dependency "rgeo-activerecord", ">= 7.0"
   spec.add_dependency "rgeo-geojson", "~> 2.0"

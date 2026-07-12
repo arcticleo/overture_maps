@@ -3,7 +3,6 @@ pkg/
 *.gem
 Gemfile.lock
 coverage/
-.rspec
 log/
 tmp/
 

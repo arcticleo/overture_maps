@@ -1,22 +1,24 @@
-# frozen_string_literal: true
-
-class CreateOvertureBuildings < ActiveRecord::Migration[8.0]
+class CreateOvertureBuildings < ActiveRecord::Migration<%= migration_version %>
   def change
-    create_table :overture_buildings, id: :string, primary_key: :id do |t|
-      t.string :names, array: true, default: []
+    create_table :overture_buildings, id: :string do |t|
+      t.string :name
+      t.jsonb :names, default: {}
+      t.string :subtype
+      t.string :building_class
       t.float :height
+      t.integer :num_floors
       t.integer :level
-      t.string :class
       t.boolean :is_underground, default: false
+      t.jsonb :sources, default: []
+      t.string :overture_release
       t.timestamps
     end
 
-    # Add geometry column using PostGIS adapter
-    add_column :overture_buildings, :geometry, :st_point, geographic: true, srid: 4326
+    # Generic geography: building footprints are polygons/multipolygons.
+    add_column :overture_buildings, :geometry, :geometry, geographic: true, srid: 4326
     add_index :overture_buildings, :geometry, using: :gist
 
     add_index :overture_buildings, :height
-    add_index :overture_buildings, :level
-    add_index :overture_buildings, :class
+    add_index :overture_buildings, :building_class
   end
 end

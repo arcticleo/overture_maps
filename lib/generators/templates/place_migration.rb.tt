@@ -1,24 +1,30 @@
-# frozen_string_literal: true
-
-class CreateOverturePlaces < ActiveRecord::Migration[8.0]
+class CreateOverturePlaces < ActiveRecord::Migration<%= migration_version %>
   def change
-    create_table :overture_places, id: :string, primary_key: :id do |t|
-      t.string :names, array: true, default: []
+    create_table :overture_places, id: :string do |t|
+      t.string :name
+      t.jsonb :names, default: {}
       t.jsonb :categories, default: {}
+      t.string :primary_category
       t.jsonb :brands, default: {}
       t.jsonb :addresses, default: []
-      t.string :confidence
-      t.float :elevation
+      t.jsonb :sources, default: []
+      t.jsonb :websites, default: []
+      t.jsonb :socials, default: []
+      t.jsonb :emails, default: []
+      t.jsonb :phones, default: []
+      t.decimal :confidence, precision: 3, scale: 2
+      t.string :operating_status
       t.string :country
+      t.string :overture_release
       t.timestamps
     end
 
-    add_index :overture_places, :country
-    add_index :overture_places, :categories, using: :gin
-    add_index :overture_places, :brands, using: :gin
-
-    # Add geometry column using PostGIS adapter
     add_column :overture_places, :geometry, :st_point, geographic: true, srid: 4326
     add_index :overture_places, :geometry, using: :gist
+
+    add_index :overture_places, :name
+    add_index :overture_places, :country
+    add_index :overture_places, :primary_category
+    add_index :overture_places, :categories, using: :gin
   end
 end

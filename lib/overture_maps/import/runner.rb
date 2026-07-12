@@ -1,90 +1,57 @@
 # frozen_string_literal: true
 
 require "rgeo"
+require "rgeo/geo_json"
+require "json"
 
 module OvertureMaps
   module Import
+    # Batches records into idempotent upserts. Re-running an import updates
+    # existing rows (keyed on the GERS id primary key) instead of failing.
     class Runner
-      BATCH_SIZE = 1000
+      MAX_STORED_ERRORS = 50
 
-      attr_reader :model_class, :batch_size
+      attr_reader :model_class, :theme, :batch_size, :imported_count, :error_count, :errors
 
-      def initialize(model_class:, batch_size: BATCH_SIZE)
+      def initialize(model_class:, theme: nil, batch_size: nil, mapper: nil, release: nil)
         @model_class = model_class
-        @batch_size = batch_size
+        @theme = theme
+        @release = release
+        @batch_size = batch_size || OvertureMaps.configuration.batch_size
+        @mapper = mapper
         @imported_count = 0
         @error_count = 0
         @errors = []
       end
 
-      # Import from a file path
-      def import_from_file(path, transform: nil, filter: nil)
-        reader = ParquetReader.new(theme: theme_from_class)
-
-        import_from_reader(reader, source: path, transform: transform, filter: filter)
-      end
-
-      # Import from a ParquetReader
-      def import_from_reader(reader, source:, transform: nil, filter: nil)
-        records = []
-
-        reader.each_record(source: source) do |record|
-          # Apply filter if provided
-          next if filter && !filter.call(record)
-
-          transformed = transform ? transform.call(record) : record_to_attributes(record)
-
-          if transformed
-            records << transformed
-
-            if records.length >= batch_size
-              flush_records(records)
-              records = []
-            end
-          end
-        end
-
-        # Flush remaining records
-        flush_records(records) if records.any?
-
-        self
-      end
-
-      # Import from an Enumerable of records
+      # Imports from anything that yields raw Overture record hashes.
       def import_from_records(records, transform: nil, filter: nil)
         batch = []
 
         records.each do |record|
-          # Apply filter if provided
           next if filter && !filter.call(record)
 
-          transformed = transform ? transform.call(record) : record_to_attributes(record)
+          attrs = transform_record(record, transform)
+          next unless attrs
 
-          if transformed
-            batch << transformed
-
-            if batch.length >= batch_size
-              flush_records(batch)
-              batch = []
-            end
+          batch << attrs
+          if batch.length >= batch_size
+            flush_records(batch)
+            batch = []
           end
         end
 
         flush_records(batch) if batch.any?
-
         self
       end
 
-      def imported_count
-        @imported_count
+      def import_from_reader(reader, source:, transform: nil, filter: nil)
+        import_from_records(reader.enum_for(:each_record, source: source), transform: transform, filter: filter)
       end
 
-      def error_count
-        @error_count
-      end
-
-      def errors
-        @errors
+      def import_from_file(path, theme: nil, transform: nil, filter: nil)
+        reader = ParquetReader.new(theme: theme)
+        import_from_reader(reader, source: path, transform: transform, filter: filter)
       end
 
       def success?
@@ -93,102 +60,77 @@ module OvertureMaps
 
       private
 
+      def transform_record(record, transform)
+        attrs = transform ? transform.call(record) : default_mapper.call(record)
+        return nil unless attrs
+
+        if attrs[:geometry] || attrs["geometry"]
+          key = attrs.key?(:geometry) ? :geometry : "geometry"
+          attrs[key] = parse_geometry(attrs[key])
+        end
+        attrs
+      rescue StandardError => e
+        record_error("mapping failed: #{e.message}", record["id"])
+        nil
+      end
+
+      def default_mapper
+        @default_mapper ||= @mapper || RecordMapper.for(
+          theme: theme, model_class: model_class, release: @release
+        )
+      end
+
       def flush_records(records)
         return if records.empty?
 
-        model_class.insert_all!(records)
+        model_class.upsert_all(records, unique_by: model_class.primary_key)
         @imported_count += records.length
-      rescue StandardError => e
-        @error_count += records.length
-        @errors << { error: e.message, records: records.length }
-
-        # Try inserting one by one to identify bad records
+      rescue StandardError
+        # Isolate bad rows without abandoning the batch.
         records.each do |record|
-          begin
-            model_class.insert!(record)
-            @imported_count += 1
-            @error_count -= 1
-          rescue StandardError => record_error
-            @errors << { error: record_error.message, record: record }
-          end
+          model_class.upsert_all([record], unique_by: model_class.primary_key)
+          @imported_count += 1
+        rescue StandardError => e
+          record_error(e.message, record[:id] || record["id"])
         end
       end
 
-      def theme_from_class
-        model_class.name.demodulize.underscore
+      def record_error(message, record_id = nil)
+        @error_count += 1
+        @errors << { error: message, record_id: record_id } if @errors.length < MAX_STORED_ERRORS
       end
 
-      # Convert Parquet record to model attributes
-      def record_to_attributes(record)
-        attrs = {
-          id: record["id"],
-          geometry: parse_geometry(record["geometry"]),
-          created_at: Time.current,
-          updated_at: Time.current
-        }
-
-        # Extract names array from struct {primary: "...", common: {...}, rules: [...]}
-        if record["names"]
-          names = []
-          names << record["names"]["primary"] if record["names"]["primary"]
-          if record["names"]["common"].is_a?(Hash)
-            names.concat(record["names"]["common"].values)
-          end
-          attrs[:names] = names
-        end
-
-        # Categories: store the struct as JSONB
-        attrs[:categories] = record["categories"] if record["categories"]
-
-        # Brand: field is "brand" (singular) in Overture data, "brands" in DB
-        attrs[:brands] = record["brand"] if record["brand"]
-
-        # Addresses: store the list of address structs as JSONB
-        attrs[:addresses] = record["addresses"] if record["addresses"]
-
-        # Extract country from first address if available
-        if record["addresses"].is_a?(Array) && record["addresses"].first
-          attrs[:country] = record["addresses"].first["country"]
-        end
-
-        # Numeric/string fields
-        attrs[:confidence] = record["confidence"]&.to_s
-        attrs[:elevation] = record["elevation"]
-
-        # Building fields
-        attrs[:height] = record["height"]
-        attrs[:level] = record["level"]
-        attrs[:is_underground] = record["is_underground"]
-
-        # Address fields (for address theme)
-        attrs[:street] = record["street"]
-        attrs[:locality] = record["locality"]
-        attrs[:region] = record["region"]
-        attrs[:postcode] = record["postcode"]
-
-        attrs.compact
-      end
-
-      # Parse geometry from WKB or GeoJSON
+      # Overture geometry arrives as WKB (binary or hex, from parquet), WKT
+      # (from DuckDB text output), or GeoJSON. A geometry that fails to parse
+      # skips that record — it must never abort the import loop.
       def parse_geometry(geom)
-        return nil unless geom
+        return nil if geom.nil?
+        return geom if geom.is_a?(RGeo::Feature::Instance)
 
-        factory = RGeo::Geographic.spherical_factory(srid: 4326)
+        factory = self.class.geo_factory
 
         case geom
-        when String
-          # Try as WKB hex string
-          begin
-            factory.parse_wkb(geom)
-          rescue RGeo::Error
-            # Try as GeoJSON
-            RGeo::GeoJSON.decode(geom, geo_factory: factory)
-          end
         when Hash
           RGeo::GeoJSON.decode(geom, geo_factory: factory)
-        else
-          nil
+        when String
+          parse_geometry_string(geom, factory)
         end
+      end
+
+      def parse_geometry_string(geom, factory)
+        stripped = geom.strip
+        if stripped.start_with?("{")
+          RGeo::GeoJSON.decode(stripped, geo_factory: factory)
+        elsif stripped.match?(/\A[A-Za-z]/)
+          factory.parse_wkt(stripped)
+        else
+          # Binary or hex WKB; RGeo's parser auto-detects hex strings.
+          factory.parse_wkb(geom)
+        end
+      end
+
+      def self.geo_factory
+        @geo_factory ||= RGeo::Geographic.spherical_factory(srid: 4326)
       end
     end
   end

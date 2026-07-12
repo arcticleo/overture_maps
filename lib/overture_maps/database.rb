@@ -1,68 +1,73 @@
 # frozen_string_literal: true
 
-require "active_record"
-
 module OvertureMaps
+  # PostGIS helpers. Identifiers are quoted and values sanitized — nothing
+  # user-supplied is interpolated into SQL.
   module Database
     class << self
-      # Check if PostGIS extension is available
       def postgis_available?
-        connection = ActiveRecord::Base.connection
-        connection.extension_enabled?("postgis") rescue false
+        connection.extension_enabled?("postgis")
+      rescue StandardError
+        false
       end
 
-      # Enable PostGIS extension (must be superuser)
       def enable_postgis
-        connection = ActiveRecord::Base.connection
         connection.execute("CREATE EXTENSION IF NOT EXISTS postgis")
       end
 
-      # Create a spatial index on a geometry column
       def create_spatial_index(table_name, column_name = "geometry")
-        sql = "CREATE INDEX #{table_name}_#{column_name}_idx ON #{table_name} USING GIST (#{column_name})"
-        ActiveRecord::Base.connection.execute(sql)
+        index = quote_ident("#{table_name}_#{column_name}_idx")
+        connection.execute(
+          "CREATE INDEX IF NOT EXISTS #{index} ON #{quote_ident(table_name)} " \
+          "USING GIST (#{quote_ident(column_name)})"
+        )
       end
 
-      # Drop a spatial index
       def drop_spatial_index(table_name, column_name = "geometry")
-        sql = "DROP INDEX IF EXISTS #{table_name}_#{column_name}_idx"
-        ActiveRecord::Base.connection.execute(sql)
+        connection.execute("DROP INDEX IF EXISTS #{quote_ident("#{table_name}_#{column_name}_idx")}")
       end
 
-      # Rebuild spatial index (for after bulk loads)
       def reindex_spatial(table_name, column_name = "geometry")
-        connection = ActiveRecord::Base.connection
-        connection.execute("REINDEX INDEX #{table_name}_#{column_name}_idx")
+        connection.execute("REINDEX INDEX #{quote_ident("#{table_name}_#{column_name}_idx")}")
       end
 
-      # Get table geometry info
       def geometry_info(table_name, column_name = "geometry")
-        sql = <<~SQL
-          SELECT type, srid, has_z, has_m
-          FROM geometry_columns
-          WHERE f_table_name = '#{table_name}' AND f_geometry_column = '#{column_name}'
-        SQL
-        ActiveRecord::Base.connection.execute(sql).first
+        exec_sanitized(
+          "SELECT type, srid FROM geometry_columns WHERE f_table_name = ? AND f_geometry_column = ?",
+          table_name.to_s, column_name.to_s
+        ).first
       end
 
-      # Perform a bounding box query
       def bounding_box_query(table_name, south, west, north, east, column_name = "geometry")
-        sql = <<~SQL
-          SELECT * FROM #{table_name}
-          WHERE #{column_name} && ST_MakeEnvelope(#{west}, #{south}, #{east}, #{north}, 4326)
-        SQL
-        ActiveRecord::Base.connection.execute(sql)
+        exec_sanitized(
+          "SELECT * FROM #{quote_ident(table_name)} " \
+          "WHERE #{quote_ident(column_name)} && ST_MakeEnvelope(?, ?, ?, ?, 4326)::geography",
+          Float(west), Float(south), Float(east), Float(north)
+        )
       end
 
-      # Perform a nearest neighbor query
       def nearest_neighbors(table_name, lat, lng, limit = 10, column_name = "geometry")
-        sql = <<~SQL
-          SELECT *, ST_Distance(#{column_name}, ST_Point(#{lng}, #{lat})::geography) AS distance
-          FROM #{table_name}
-          ORDER BY #{column_name} <-> ST_Point(#{lng}, #{lat})::geography
-          LIMIT #{limit}
-        SQL
-        ActiveRecord::Base.connection.execute(sql)
+        column = quote_ident(column_name)
+        exec_sanitized(
+          "SELECT *, ST_Distance(#{column}, ST_SetSRID(ST_MakePoint(?, ?), 4326)::geography) AS distance " \
+          "FROM #{quote_ident(table_name)} " \
+          "ORDER BY #{column} <-> ST_SetSRID(ST_MakePoint(?, ?), 4326)::geography LIMIT ?",
+          Float(lng), Float(lat), Float(lng), Float(lat), Integer(limit)
+        )
+      end
+
+      private
+
+      def exec_sanitized(sql, *values)
+        connection.exec_query(ActiveRecord::Base.sanitize_sql([sql, *values]))
+      end
+
+      def connection
+        ActiveRecord::Base.connection
+      end
+
+      def quote_ident(name)
+        connection.quote_table_name(name.to_s)
       end
     end
   end

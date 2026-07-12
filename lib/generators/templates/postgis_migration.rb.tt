@@ -1,4 +1,4 @@
-class CreateOverturePostgis < ActiveRecord::Migration[8.0]
+class CreateOverturePostgis < ActiveRecord::Migration<%= migration_version %>
   def change
     enable_extension "postgis"
   end

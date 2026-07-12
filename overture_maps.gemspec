@@ -1,11 +1,12 @@
-# OvertureMaps Gem Specification
+# frozen_string_literal: true
+
 require_relative "lib/overture_maps/version"
 
 Gem::Specification.new do |spec|
   spec.name = "overture_maps"
   spec.version = OvertureMaps::VERSION
   spec.summary = "Ruby gem for Overture Maps integration"
-  spec.description = "A Ruby gem to import Overture Maps geospatial Parquet data into your Rails application"
+  spec.description = "Download, store, and query Overture Maps geospatial data in your Rails application"
   spec.homepage = "https://github.com/overture-maps/overture-maps-ruby"
   spec.license = "MIT"
   spec.author = "Overture Maps"
@@ -13,20 +14,23 @@ Gem::Specification.new do |spec|
 
   spec.required_ruby_version = ">= 3.0"
 
-  spec.files = Dir["lib/**/*", "config/**/*", "README.md", "LICENSE.txt"]
+  spec.files = Dir["lib/**/*", "README.md", "LICENSE.txt"]
   spec.require_paths = ["lib"]
 
-  # Dependencies
-  spec.add_dependency "rails", ">= 7.0"
+  spec.add_dependency "activerecord", ">= 7.0"
+  spec.add_dependency "railties", ">= 7.0"
   spec.add_dependency "csv"
   spec.add_dependency "rgeo", "~> 3.0"
-  spec.add_dependency "rgeo-activerecord"
-  spec.add_dependency "activerecord-postgis-adapter"
-  spec.add_dependency "parquet", "~> 0.0"
-  spec.add_dependency "aws-sdk-s3", "~> 1.0"
+  spec.add_dependency "rgeo-activerecord", ">= 7.0"
+  spec.add_dependency "rgeo-geojson", "~> 2.0"
+  spec.add_dependency "activerecord-postgis-adapter", ">= 9.0"
+  spec.add_dependency "parquet", ">= 0.5"
 
-  # Development dependencies
+  # The duckdb gem (native bindings) is optional but recommended; without it
+  # the gem falls back to the DuckDB CLI (PATH lookup, then a pinned,
+  # verified download).
+
   spec.add_development_dependency "rspec", "~> 3.12"
   spec.add_development_dependency "webmock", "~> 3.18"
-  spec.add_development_dependency "vcr", "~> 6.1"
+  spec.add_development_dependency "rake", ">= 13.0"
 end

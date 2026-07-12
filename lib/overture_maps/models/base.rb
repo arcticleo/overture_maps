@@ -1,21 +1,23 @@
 # frozen_string_literal: true
 
-require "rgeo/active_record"
+require "rgeo"
+require "rgeo/geo_json"
 
 module OvertureMaps
   module Models
     class Base < ::ActiveRecord::Base
       self.abstract_class = true
 
-      # Scope: within bounding box
+      # Everything whose geometry intersects the bounding box. Works for any
+      # geometry type (points, building polygons, segments).
       scope :within_bounds, ->(south, west, north, east) {
         where(
-          "ST_X(geometry::geometry) BETWEEN ? AND ? AND ST_Y(geometry::geometry) BETWEEN ? AND ?",
-          west, east, south, north
+          "ST_Intersects(geometry, ST_MakeEnvelope(?, ?, ?, ?, 4326)::geography)",
+          west, south, east, north
         )
       }
 
-      # Scope: near a point (radial query)
+      # Within radius_meters of a point.
       scope :near, ->(lat, lng, radius_meters = 1000) {
         where(
           "ST_DWithin(geometry, ST_SetSRID(ST_MakePoint(?, ?), 4326)::geography, ?)",
@@ -23,14 +25,13 @@ module OvertureMaps
         )
       }
 
-      # Convert to GeoJSON
       def to_geojson
         return nil unless geometry
 
         {
           type: "Feature",
           geometry: RGeo::GeoJSON.encode(geometry),
-          properties: attributes.except("id", "geometry", "created_at", "updated_at")
+          properties: attributes.except("geometry", "created_at", "updated_at")
         }
       end
     end

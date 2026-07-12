@@ -1,628 +1,417 @@
 # frozen_string_literal: true
 
-namespace :overture_maps do
-  namespace :download do
-    desc "Download places Parquet files from S3, or by location name (e.g., rails overture_maps:download:places[Seattle])"
-    task :places, [:location, :version, :output_dir] do |_t, args|
-      require "overture_maps"
-      require "overture_maps/import/downloader"
+require "overture_maps"
 
-      theme = "places"
-      location = args[:location]
-      version = args[:version]
-      output_dir = args[:output_dir] || "tmp/overture"
+module OvertureMaps
+  # Interactive glue for the rake tasks. Prompts and process exits live here
+  # and only here — the library classes raise or take callbacks instead.
+  module RakeUI
+    IMPORT_MODELS = {
+      "places" => "OverturePlace",
+      "buildings" => "OvertureBuilding",
+      "addresses" => "OvertureAddress"
+    }.freeze
 
-      FileUtils.mkdir_p(output_dir)
+    module_function
 
-      downloader = OvertureMaps::Import::Downloader.new(
-        theme: theme,
-        type: "place",
-        version: version,
-        output_dir: output_dir
-      )
+    def interactive?
+      !OvertureMaps.configuration.non_interactive && $stdin.tty?
+    end
 
-      # Check if location looks like coordinates with optional display name (e.g., "47.6,-122.3,47.7,-122.2|seattle")
-      if location && location.match?(/^-?\d+\.?\d*[_,]-?\d+\.?\d*[_,]-?\d+\.?\d*[_,]-?\d+\.?\d*(\|.+)?$/)
-        # Split coords from display name
-        coord_part, display_name = location.split("|", 2)
-        # Format: lat1,lng1,lat2,lng2 (4 coordinates, comma or underscore separated)
-        coords = coord_part.split(/[_,]/).map(&:to_f)
-        puts "Downloading places within bounding box: #{coords.join(', ')}..."
-        puts "  Display name: #{display_name}" if display_name
-        count = downloader.download_from_s3_with_bbox(
-          lat1: coords[0],
-          lng1: coords[1],
-          lat2: coords[2],
-          lng2: coords[3],
-          display_name: display_name
-        )
-        puts "\nDownloaded data for #{count} type(s)"
-      elsif location
-        # Treat as location name
-        puts "Searching for location: #{location}..."
-        begin
-          count = downloader.download_for_division(division_name: location)
-          puts "\nDownloaded data for #{count} type(s)"
-        rescue OvertureMaps::Import::Error => e
-          puts "Error: #{e.message}"
-          exit 1
-        end
-      else
-        # Download all places
-        puts "Downloading all places#{" (version: #{version})" if version} from S3..."
-        count = downloader.download_from_s3
-        puts "\nDownloaded #{count} file(s)"
+    def abort!(message)
+      puts message
+      exit 1
+    end
+
+    def require_model!(theme)
+      name = IMPORT_MODELS[theme] or abort!("No import model for theme #{theme}")
+      model = name.constantize
+      unless model.table_exists?
+        abort!("#{name} table does not exist. Run: rails db:migrate")
+      end
+      model
+    rescue NameError
+      abort!("#{name} model not found. Run: rails generate overture_maps:install")
+    end
+
+    def select_division_callback
+      return nil unless interactive?
+
+      ->(results) { prompt_division(results) }
+    end
+
+    def confirm_cached_callback
+      return nil unless interactive?
+
+      ->(path) { prompt_cached(path) }
+    end
+
+    def prompt_division(results)
+      puts "Multiple matches found:"
+      results.each_with_index do |r, i|
+        location_info = [r[:country], r[:region]].compact.join(" / ")
+        area_info = r[:area_km2]&.positive? ? " (#{r[:area_km2]} km²)" : ""
+        puts "  #{i + 1}. #{r[:name]} (#{r[:subtype]}) - #{location_info}#{area_info}"
+      end
+      puts
+      print "Enter number to select (or 'q' to quit): "
+      input = $stdin.gets&.strip
+
+      return nil if input.nil? || input.downcase == "q"
+
+      index = input.to_i - 1
+      return nil unless index >= 0 && index < results.length
+
+      results[index]
+    end
+
+    def prompt_cached(path)
+      size = OvertureMaps::Util.format_size(File.size(path))
+      puts "Found cached extract: #{path} (#{size})"
+      print "Use it? (y = use / d = download fresh / q = quit): "
+
+      case $stdin.gets&.strip&.downcase
+      when "y", "yes", "", nil then :use
+      when "d", "download" then :refresh
+      else :abort
       end
     end
 
-    desc "Download buildings Parquet files from S3, or by location name"
-    task :buildings, [:location, :version, :output_dir] do |_t, args|
-      require "overture_maps"
-      require "overture_maps/import/downloader"
+    # Resolves a location argument (bbox string or division name) to a
+    # BoundingBox for the download tasks.
+    def resolve_bbox(location, release: nil)
+      bbox = OvertureMaps::BoundingBox.parse(location)
+      return bbox if bbox
 
-      theme = "buildings"
-      location = args[:location]
-      version = args[:version]
-      output_dir = args[:output_dir] || "tmp/overture"
+      results = OvertureMaps::Import::Downloader.search_divisions(query: location, release: release)
+      abort!("No divisions found matching '#{location}'") if results.empty?
 
-      FileUtils.mkdir_p(output_dir)
+      division = results.length == 1 || !interactive? ? results.first : prompt_division(results)
+      if division.nil?
+        puts "Cancelled."
+        exit 0
+      end
 
-      downloader = OvertureMaps::Import::Downloader.new(
-        theme: theme,
-        type: "building",
-        version: version,
-        output_dir: output_dir
-      )
+      info = [division[:country], division[:region]].compact.join(" / ")
+      puts "Using #{division[:name]} (#{division[:subtype]}#{info.empty? ? "" : ", #{info}"})"
+      division[:bbox]
+    end
 
-      if location && location.match?(/^-?\d+\.?\d*[_,]-?\d+\.?\d*[_,]-?\d+\.?\d*[_,]-?\d+\.?\d*(\|.+)?$/)
-        coord_part, display_name = location.split("|", 2)
-        coords = coord_part.split(/[_,]/).map(&:to_f)
-        puts "Downloading buildings within bounding box: #{coords.join(', ')}..."
-        puts "  Display name: #{display_name}" if display_name
-        count = downloader.download_from_s3_with_bbox(
-          lat1: coords[0],
-          lng1: coords[1],
-          lat2: coords[2],
-          lng2: coords[3],
-          display_name: display_name
-        )
-        puts "\nDownloaded data for #{count} type(s)"
-      elsif location
-        puts "Searching for location: #{location}..."
-        begin
-          count = downloader.download_for_division(division_name: location)
-          puts "\nDownloaded data for #{count} type(s)"
-        rescue OvertureMaps::Import::Error => e
-          puts "Error: #{e.message}"
-          exit 1
-        end
-      else
-        puts "Downloading all buildings#{" (version: #{version})" if version} from S3..."
-        count = downloader.download_from_s3
-        puts "\nDownloaded #{count} file(s)"
+    def print_divisions(results)
+      results.each_with_index do |r, i|
+        location_parts = [r[:country], r[:region]].compact
+        location = location_parts.any? ? " - #{location_parts.join(" / ")}" : ""
+        area_info = r[:area_km2]&.positive? ? " [#{r[:area_km2]} km²]" : ""
+        puts "  #{i + 1}. #{r[:name]} (#{r[:subtype]})#{location}#{area_info}"
       end
     end
 
-    desc "Download addresses Parquet files from S3, or by location name"
-    task :addresses, [:location, :version, :output_dir] do |_t, args|
-      require "overture_maps"
-      require "overture_maps/import/downloader"
-
-      theme = "addresses"
-      location = args[:location]
-      version = args[:version]
-      output_dir = args[:output_dir] || "tmp/overture"
-
-      FileUtils.mkdir_p(output_dir)
-
-      downloader = OvertureMaps::Import::Downloader.new(
-        theme: theme,
-        type: "address",
-        version: version,
-        output_dir: output_dir
-      )
-
-      if location && location.match?(/^-?\d+\.?\d*[_,]-?\d+\.?\d*[_,]-?\d+\.?\d*[_,]-?\d+\.?\d*(\|.+)?$/)
-        coord_part, display_name = location.split("|", 2)
-        coords = coord_part.split(/[_,]/).map(&:to_f)
-        puts "Downloading addresses within bounding box: #{coords.join(', ')}..."
-        puts "  Display name: #{display_name}" if display_name
-        count = downloader.download_from_s3_with_bbox(
-          lat1: coords[0],
-          lng1: coords[1],
-          lat2: coords[2],
-          lng2: coords[3],
-          display_name: display_name
-        )
-        puts "\nDownloaded data for #{count} type(s)"
-      elsif location
-        puts "Searching for location: #{location}..."
-        begin
-          count = downloader.download_for_division(division_name: location)
-          puts "\nDownloaded data for #{count} type(s)"
-        rescue OvertureMaps::Import::Error => e
-          puts "Error: #{e.message}"
-          exit 1
-        end
-      else
-        puts "Downloading all addresses#{" (version: #{version})" if version} from S3..."
-        count = downloader.download_from_s3
-        puts "\nDownloaded #{count} file(s)"
-      end
-    end
-
-    desc "Download divisions Parquet files from S3, or by location name"
-    task :divisions, [:location, :version, :output_dir] do |_t, args|
-      require "overture_maps"
-      require "overture_maps/import/downloader"
-
-      theme = "divisions"
-      location = args[:location]
-      version = args[:version]
-      output_dir = args[:output_dir] || "tmp/overture"
-
-      FileUtils.mkdir_p(output_dir)
-
-      downloader = OvertureMaps::Import::Downloader.new(
-        theme: theme,
-        type: "division",
-        version: version,
-        output_dir: output_dir
-      )
-
-      if location && location.match?(/^-?\d+\.?\d*[_,]-?\d+\.?\d*[_,]-?\d+\.?\d*[_,]-?\d+\.?\d*(\|.+)?$/)
-        coord_part, display_name = location.split("|", 2)
-        coords = coord_part.split(/[_,]/).map(&:to_f)
-        puts "Downloading divisions within bounding box: #{coords.join(', ')}..."
-        puts "  Display name: #{display_name}" if display_name
-        count = downloader.download_from_s3_with_bbox(
-          lat1: coords[0],
-          lng1: coords[1],
-          lat2: coords[2],
-          lng2: coords[3],
-          display_name: display_name
-        )
-        puts "\nDownloaded data for #{count} type(s)"
-      elsif location
-        puts "Searching for location: #{location}..."
-        begin
-          count = downloader.download_for_division(division_name: location)
-          puts "\nDownloaded data for #{count} type(s)"
-        rescue OvertureMaps::Import::Error => e
-          puts "Error: #{e.message}"
-          exit 1
-        end
-      else
-        puts "Downloading all divisions#{" (version: #{version})" if version} from S3..."
-        count = downloader.download_from_s3
-        puts "\nDownloaded #{count} file(s)"
-      end
-    end
-
-    desc "Download transportation Parquet files from S3, or by location name"
-    task :transportation, [:location, :version, :output_dir] do |_t, args|
-      require "overture_maps"
-      require "overture_maps/import/downloader"
-
-      theme = "transportation"
-      location = args[:location]
-      version = args[:version]
-      output_dir = args[:output_dir] || "tmp/overture"
-
-      FileUtils.mkdir_p(output_dir)
-
-      downloader = OvertureMaps::Import::Downloader.new(
-        theme: theme,
-        type: "segment",
-        version: version,
-        output_dir: output_dir
-      )
-
-      if location && location.match?(/^-?\d+\.?\d*[_,]-?\d+\.?\d*[_,]-?\d+\.?\d*[_,]-?\d+\.?\d*(\|.+)?$/)
-        coord_part, display_name = location.split("|", 2)
-        coords = coord_part.split(/[_,]/).map(&:to_f)
-        puts "Downloading transportation within bounding box: #{coords.join(', ')}..."
-        puts "  Display name: #{display_name}" if display_name
-        count = downloader.download_from_s3_with_bbox(
-          lat1: coords[0],
-          lng1: coords[1],
-          lat2: coords[2],
-          lng2: coords[3],
-          display_name: display_name
-        )
-        puts "\nDownloaded data for #{count} type(s)"
-      elsif location
-        puts "Searching for location: #{location}..."
-        begin
-          count = downloader.download_for_division(division_name: location)
-          puts "\nDownloaded data for #{count} type(s)"
-        rescue OvertureMaps::Import::Error => e
-          puts "Error: #{e.message}"
-          exit 1
-        end
-      else
-        puts "Downloading all transportation#{" (version: #{version})" if version} from S3..."
-        count = downloader.download_from_s3
-        puts "\nDownloaded #{count} file(s)"
-      end
-    end
-
-    desc "Download base Parquet files from S3, or by location name (land, water, etc.)"
-    task :base, [:location, :version, :output_dir] do |_t, args|
-      require "overture_maps"
-      require "overture_maps/import/downloader"
-
-      theme = "base"
-      location = args[:location]
-      version = args[:version]
-      output_dir = args[:output_dir] || "tmp/overture"
-
-      FileUtils.mkdir_p(output_dir)
-
-      downloader = OvertureMaps::Import::Downloader.new(
-        theme: theme,
-        type: "land",
-        version: version,
-        output_dir: output_dir
-      )
-
-      if location && location.match?(/^-?\d+\.?\d*[_,]-?\d+\.?\d*[_,]-?\d+\.?\d*[_,]-?\d+\.?\d*(\|.+)?$/)
-        coord_part, display_name = location.split("|", 2)
-        coords = coord_part.split(/[_,]/).map(&:to_f)
-        puts "Downloading base data within bounding box: #{coords.join(', ')}..."
-        puts "  Display name: #{display_name}" if display_name
-        count = downloader.download_from_s3_with_bbox(
-          lat1: coords[0],
-          lng1: coords[1],
-          lat2: coords[2],
-          lng2: coords[3],
-          display_name: display_name
-        )
-        puts "\nDownloaded data for #{count} type(s)"
-      elsif location
-        puts "Searching for location: #{location}..."
-        begin
-          count = downloader.download_for_division(division_name: location)
-          puts "\nDownloaded data for #{count} type(s)"
-        rescue OvertureMaps::Import::Error => e
-          puts "Error: #{e.message}"
-          exit 1
-        end
-      else
-        puts "Downloading all base data#{" (version: #{version})" if version} from S3..."
-        count = downloader.download_from_s3
-        puts "\nDownloaded #{count} file(s)"
-      end
-    end
-
-    desc "Download all themes from S3 (global data only), or by location name (e.g., rails overture_maps:download:all[Seattle])"
-    task :all, [:location, :version, :output_dir] do |_t, args|
-      require "overture_maps"
-      require "overture_maps/import/downloader"
-
-      location = args[:location]
-      version = args[:version]
-      output_dir = args[:output_dir] || "tmp/overture"
-
-      themes = %w[places buildings addresses divisions transportation base]
-
-      # If location is provided, resolve it once and get bbox
-      bbox_coords = nil
-      if location
-        # Check if it's already a bounding box (with or without display name)
-        if location.match?(/^-?\d+\.?\d*[_,]-?\d+\.?\d*[_,]-?\d+\.?\d*[_,]-?\d+\.?\d*(\|.+)?$/)
-          bbox_coords = location
-        else
-          # Search for the division once
-          puts "Searching for location: #{location}..."
-          puts
-
-          results = OvertureMaps::Import::Downloader.search_divisions(query: location, version: version)
-
-          if results.empty?
-            puts "Error: No divisions found matching '#{location}'"
-            exit 1
-          end
-
-          selected = if results.count == 1
-            results.first
-          else
-            puts "Multiple matches found for '#{location}':"
-            results.each_with_index do |r, i|
-              location_parts = [r[:country], r[:region]].compact
-              location_str = location_parts.any? ? " - #{location_parts.join(" / ")}" : ""
-              area_info = r[:area_km2] && r[:area_km2] > 0 ? " (#{r[:area_km2]} km²)" : ""
-              puts "  #{i + 1}. #{r[:name]} (#{r[:subtype]})#{location_str}#{area_info}"
-            end
-            puts
-            print "Enter number to select (or 'q' to quit): "
-            input = $stdin.gets&.strip
-
-            if input == 'q' || input.nil?
-              puts "Cancelled."
-              exit 0
-            end
-
-            idx = input.to_i - 1
-            unless idx >= 0 && idx < results.count
-              puts "Invalid selection."
-              exit 1
-            end
-
-            results[idx]
-          end
-
-          bbox = selected[:bbox]
-          unless bbox
-            puts "Error: Could not get bounding box for '#{selected[:name]}'"
-            exit 1
-          end
-
-          location_info = [selected[:country], selected[:region]].compact.join(" / ")
-          puts "Selected: #{selected[:name]} (#{location_info})"
-          puts "Bounding box: #{bbox['ymin']}, #{bbox['xmin']} to #{bbox['ymax']}, #{bbox['xmax']}"
-          puts
-
-          # Convert bbox to coordinate string with display name
-          display_name = selected[:name].downcase.gsub(/[^a-z0-9]+/, '_').gsub(/^_+|_+$/, '')
-          bbox_coords = "#{bbox['ymin']},#{bbox['xmin']},#{bbox['ymax']},#{bbox['xmax']}|#{display_name}"
-        end
-      end
-
-      themes.each do |theme|
-        puts "\n--- Downloading #{theme} ---"
-
-        # Invoke the individual theme task with bbox coordinates instead of name
-        # This avoids re-searching for each theme
-        theme_task = Rake::Task["overture_maps:download:#{theme}"]
-        theme_task.invoke(bbox_coords, version, output_dir)
-        theme_task.reenable
-      end
-
-      puts "\n=== All downloads complete! ==="
-    end
-
-    desc "Download from Azure Blob Storage"
-    task :azure, [:theme, :region, :version, :output_dir] do |_t, args|
-      require "overture_maps"
-      require "overture_maps/import/downloader"
-
-      theme = args[:theme] || "places"
-      region = args[:region]
-      version = args[:version]
-      output_dir = args[:output_dir]
-
-      unless ENV["AZURE_STORAGE_ACCESS_KEY"]
-        puts "Error: AZURE_STORAGE_ACCESS_KEY environment variable not set"
-        puts "Set it with: export AZURE_STORAGE_ACCESS_KEY='your-key'"
-        exit 1
-      end
-
-      downloader = OvertureMaps::Import::Downloader.new(
-        theme: theme,
-        region: region,
-        version: version,
-        output_dir: output_dir
-      )
-
-      puts "Downloading #{theme}#{" (#{region})" if region} from Azure..."
-
-      count = downloader.download_from_azure
-      puts "\nDownloaded #{count} file(s)"
-    end
-
-    desc "List available regions for a theme"
-    task :regions, [:theme, :version] do |_t, args|
-      require "overture_maps"
-      require "overture_maps/import/downloader"
-
-      theme = args[:theme] || "places"
-      version = args[:version]
-
-      regions = OvertureMaps::Import::Downloader.list_regions(theme: theme, version: version)
-
-      puts "Available regions for #{theme}:"
-      regions.each { |r| puts "  - #{r}" }
-    end
-
-    desc "List available versions"
-    task :versions do |_t, _args|
-      require "overture_maps"
-      require "overture_maps/import/downloader"
-
-      versions = OvertureMaps::Import::Downloader.list_versions
-
-      puts "Available versions:"
-      versions.each { |v| puts "  - #{v}" }
-    end
-
-    desc "List available themes"
-    task :themes do |_t, _args|
-      require "overture_maps"
-      require "overture_maps/import/downloader"
-
-      puts "Available themes:"
-      OvertureMaps::Import::Downloader.themes.each { |t| puts "  - #{t}" }
-    end
-
-    desc "List files available for download"
-    task :list, [:theme, :region, :version, :provider] do |_t, args|
-      require "overture_maps"
-      require "overture_maps/import/downloader"
-
-      theme = args[:theme] || "places"
-      region = args[:region]
-      version = args[:version]
-      provider = (args[:provider] || "s3").to_sym
-
-      downloader = OvertureMaps::Import::Downloader.new(
-        theme: theme,
-        region: region,
-        version: version
-      )
-
-      files = downloader.list_files(provider: provider)
-
-      puts "Available files for #{theme}#{" (#{region})" if region}:"
-      files.each do |f|
-        size_mb = f[:size] ? (f[:size] / 1_000_000.0).round(2) : "unknown"
-        puts "  - #{f[:key].split("/").last} (#{size_mb} MB)"
-      end
-    end
-  end
-
-  namespace :import do
-    desc "Import places from a Parquet file"
-    task :places, [:file_path] do |_t, args|
-      require "overture_maps"
-      require "overture_maps/import"
-
-      file_path = args[:file_path]
-      raise "Please provide a file path: rake overture_maps:import:places[/path/to/places.parquet]" unless file_path
-
-      puts "Importing places from #{file_path}..."
-
-      reader = OvertureMaps::Import::ParquetReader.new(theme: "places")
-
-      runner = OvertureMaps::Import::Runner.new(
-        model_class: OverturePlace,
-        batch_size: 1000
-      )
-
-      transform = ->(record) {
-        {
-          id: record["id"],
-          names: record["names"],
-          categories: record["categories"]&.to_json,
-          brands: record["brands"]&.to_json,
-          addresses: record["addresses"]&.to_json,
-          confidence: record["confidence"],
-          elevation: record["elevation"],
-          country: record["country"],
-          geometry: parse_geometry(record["geometry"]),
-          created_at: Time.current,
-          updated_at: Time.current
-        }.compact
-      }
-
-      runner.import_from_file(file_path, transform: transform)
-
-      puts "\nImported: #{runner.imported_count}"
-      puts "Errors: #{runner.error_count}"
-    end
-
-    desc "Import buildings from a Parquet file"
-    task :buildings, [:file_path] do |_t, args|
-      require "overture_maps"
-      require "overture_maps/import"
-
-      file_path = args[:file_path]
-      raise "Please provide a file path: rake overture_maps:import:buildings[/path/to/buildings.parquet]" unless file_path
-
-      puts "Importing buildings from #{file_path}..."
-
-      runner = OvertureMaps::Import::Runner.new(
-        model_class: OvertureBuilding,
-        batch_size: 1000
-      )
-
-      transform = ->(record) {
-        {
-          id: record["id"],
-          names: record["names"],
-          height: record["height"],
-          level: record["level"],
-          class: record["class"],
-          is_underground: record["is_underground"],
-          geometry: parse_geometry(record["geometry"]),
-          created_at: Time.current,
-          updated_at: Time.current
-        }.compact
-      }
-
-      runner.import_from_file(file_path, transform: transform)
-
-      puts "\nImported: #{runner.imported_count}"
-      puts "Errors: #{runner.error_count}"
-    end
-
-    desc "Import addresses from a Parquet file"
-    task :addresses, [:file_path] do |_t, args|
-      require "overture_maps"
-      require "overture_maps/import"
-
-      file_path = args[:file_path]
-      raise "Please provide a file path: rake overture_maps:import:addresses[/path/to/addresses.parquet]" unless file_path
-
-      puts "Importing addresses from #{file_path}..."
-
-      runner = OvertureMaps::Import::Runner.new(
-        model_class: OvertureAddress,
-        batch_size: 1000
-      )
-
-      transform = ->(record) {
-        {
-          id: record["id"],
-          street: record["street"],
-          locality: record["locality"],
-          region: record["region"],
-          country: record["country"],
-          postcode: record["postcode"],
-          geometry: parse_geometry(record["geometry"]),
-          created_at: Time.current,
-          updated_at: Time.current
-        }.compact
-      }
-
-      runner.import_from_file(file_path, transform: transform)
-
-      puts "\nImported: #{runner.imported_count}"
-      puts "Errors: #{runner.error_count}"
-    end
-
-    desc "Show Parquet file record count"
-    task :count, [:file_path] do |_t, args|
-      require "overture_maps"
-      require "overture_maps/import"
-
-      file_path = args[:file_path]
-      raise "Please provide a file path" unless file_path
-
-      reader = OvertureMaps::Import::ParquetReader.new(theme: "places")
-      count = reader.record_count(source: file_path)
-
-      puts "Records in #{file_path}: #{count}"
-    end
-
-    desc "List available themes"
-    task :themes do |_t, _args|
-      require "overture_maps"
-      require "overture_maps/import"
-
-      puts "Available themes:"
-      OvertureMaps::Import::ParquetReader::THEMES.each do |theme|
-        puts "  - #{theme}"
-      end
+    def release_arg
+      ENV["OVERTURE_RELEASE"]
     end
   end
 end
 
-def parse_geometry(geom)
-  return nil unless geom
+namespace :overture_maps do
+  namespace :import do
+    OvertureMaps::RakeUI::IMPORT_MODELS.each_key do |theme|
+      desc "Import #{theme} by location name or bounding box, e.g. rails overture_maps:import:#{theme}[Seattle]"
+      task theme.to_sym, [:location, :categories] => :environment do |_t, args|
+        location = args[:location]
+        unless location
+          puts "Usage:"
+          puts "  rails overture_maps:import:#{theme}[Seattle]"
+          puts "  rails \"overture_maps:import:#{theme}[47.606_-122.336_47.609_-122.333]\""
+          puts "  rails overture_maps:import:#{theme}[Seattle,\"cafe,restaurant\"]  # leaf categories" if theme == "places"
+          exit 1
+        end
 
-  factory = RGeo::Geographic.spherical_factory(srid: 4326)
+        categories = args[:categories]&.split(",")&.map(&:strip)
+        model = OvertureMaps::RakeUI.require_model!(theme)
 
-  case geom
-  when String
-    begin
-      factory.parse_wkb(geom)
-    rescue RGeo::Error
-      RGeo::GeoJSON.decode(geom, geo_factory: factory)
+        begin
+          runner = OvertureMaps::Import::LocationBasedRunner.new(
+            theme: theme,
+            location: location,
+            model_class: model,
+            categories: categories,
+            release: OvertureMaps::RakeUI.release_arg,
+            select_division: OvertureMaps::RakeUI.select_division_callback,
+            confirm_cached: OvertureMaps::RakeUI.confirm_cached_callback
+          ).run
+        rescue OvertureMaps::CancelledError
+          puts "Cancelled."
+          exit 0
+        rescue OvertureMaps::Error => e
+          OvertureMaps::RakeUI.abort!("Error: #{e.message}")
+        end
+
+        puts
+        puts "Import complete: #{runner.imported_count} imported, #{runner.error_count} errors"
+        if runner.errors.any? && ENV["VERBOSE"]
+          runner.errors.first(10).each { |err| puts "  - #{err[:error]} (#{err[:record_id]})" }
+        end
+        exit 1 if runner.error_count.positive? && !ENV["IGNORE_ERRORS"]
+      end
     end
-  when Hash
-    RGeo::GeoJSON.decode(geom, geo_factory: factory)
-  else
-    nil
+
+    desc "Import all supported themes for a location"
+    task :all, [:location] => :environment do |_t, args|
+      location = args[:location] or OvertureMaps::RakeUI.abort!(
+        "Usage: rails overture_maps:import:all[Seattle]"
+      )
+
+      # Resolve the location once so each theme reuses the same bbox instead
+      # of re-searching (and re-prompting).
+      bbox = OvertureMaps::RakeUI.resolve_bbox(location, release: OvertureMaps::RakeUI.release_arg)
+
+      failures = 0
+      OvertureMaps::RakeUI::IMPORT_MODELS.each_key do |theme|
+        puts "=" * 60
+        puts "Importing #{theme}..."
+        puts "=" * 60
+
+        model = OvertureMaps::RakeUI.require_model!(theme)
+        runner = OvertureMaps::Import::LocationBasedRunner.new(
+          theme: theme, location: bbox, model_class: model,
+          release: OvertureMaps::RakeUI.release_arg,
+          confirm_cached: OvertureMaps::RakeUI.confirm_cached_callback
+        ).run
+        puts "#{theme}: #{runner.imported_count} imported, #{runner.error_count} errors"
+        failures += runner.error_count
+        puts
+      end
+
+      puts "All imports complete!"
+      exit 1 if failures.positive? && !ENV["IGNORE_ERRORS"]
+    end
+
+    desc "Search for geographic divisions"
+    task :search, [:query] => :environment do |_t, args|
+      query = args[:query] or OvertureMaps::RakeUI.abort!(
+        "Usage: rails overture_maps:import:search[Seattle]"
+      )
+
+      results = OvertureMaps::Import::Downloader.search_divisions(
+        query: query, release: OvertureMaps::RakeUI.release_arg
+      )
+      if results.empty?
+        puts "No divisions found matching '#{query}'"
+      else
+        puts "Results:"
+        OvertureMaps::RakeUI.print_divisions(results)
+        puts
+        puts "Tip: rails overture_maps:import:places[#{results.first[:name]}]"
+      end
+    rescue OvertureMaps::Error => e
+      OvertureMaps::RakeUI.abort!("Error: #{e.message}")
+    end
+
+    desc "Show import statistics"
+    task stats: :environment do
+      OvertureMaps::RakeUI::IMPORT_MODELS.each do |theme, model_name|
+        count = begin
+          model_name.constantize.count
+        rescue StandardError
+          "N/A (run rails generate overture_maps:install && rails db:migrate)"
+        end
+        puts format("  %-12s %s", "#{theme.capitalize}:", count)
+      end
+    end
+  end
+
+  namespace :download do
+    OvertureMaps::Import::Downloader::THEMES.each do |theme|
+      desc "Download #{theme} data by location name or bbox; without a location downloads complete theme files (large!)"
+      task theme.to_sym, [:location, :release, :output_dir] do |_t, args|
+        release = args[:release] || OvertureMaps::RakeUI.release_arg
+        downloader = OvertureMaps::Import::Downloader.new(
+          theme: theme, release: release, output_dir: args[:output_dir]
+        )
+
+        begin
+          if args[:location]
+            bbox = OvertureMaps::RakeUI.resolve_bbox(args[:location], release: release)
+            files = downloader.extract_bbox_all_types(bbox)
+            puts "\nDownloaded #{files.count} extract(s)"
+          else
+            puts "No location given — downloading ALL #{theme} files for #{downloader.release}."
+            puts "This can be very large; prefer overture_maps:download:#{theme}[<location>]."
+            count = downloader.download_theme_files
+            puts "\nDownloaded #{count} file(s)"
+          end
+        rescue OvertureMaps::Error => e
+          OvertureMaps::RakeUI.abort!("Error: #{e.message}")
+        end
+      end
+    end
+
+    desc "Download data within a bounding box, e.g. rails overture_maps:download:bbox[places,47.6,-122.4,47.7,-122.2]"
+    task :bbox, [:theme, :lat1, :lng1, :lat2, :lng2, :type, :release, :output_dir, :format] do |_t, args|
+      unless args[:lat1] && args[:lng1] && args[:lat2] && args[:lng2]
+        OvertureMaps::RakeUI.abort!("Usage: rails overture_maps:download:bbox[theme,lat1,lng1,lat2,lng2]")
+      end
+
+      bbox = OvertureMaps::BoundingBox.new(
+        lat1: args[:lat1], lng1: args[:lng1], lat2: args[:lat2], lng2: args[:lng2]
+      )
+      downloader = OvertureMaps::Import::Downloader.new(
+        theme: args[:theme] || "places", type: args[:type],
+        release: args[:release] || OvertureMaps::RakeUI.release_arg,
+        output_dir: args[:output_dir]
+      )
+      files = downloader.extract_bbox_all_types(bbox, format: args[:format] || "parquet")
+      puts "\nDownloaded #{files.count} extract(s)"
+    rescue OvertureMaps::Error, ArgumentError => e
+      OvertureMaps::RakeUI.abort!("Error: #{e.message}")
+    end
+
+    desc "Download data near a point, e.g. rails overture_maps:download:nearby[places,47.6,-122.3,5000]"
+    task :nearby, [:theme, :lat, :lng, :radius, :type, :release, :output_dir] do |_t, args|
+      unless args[:lat] && args[:lng]
+        OvertureMaps::RakeUI.abort!("Usage: rails overture_maps:download:nearby[theme,lat,lng,radius_meters]")
+      end
+
+      downloader = OvertureMaps::Import::Downloader.new(
+        theme: args[:theme] || "places", type: args[:type],
+        release: args[:release] || OvertureMaps::RakeUI.release_arg,
+        output_dir: args[:output_dir]
+      )
+      files = downloader.extract_nearby(
+        lat: args[:lat], lng: args[:lng],
+        radius_meters: (args[:radius] || 5000).to_i
+      )
+      puts "\nDownloaded #{files.count} extract(s)"
+    rescue OvertureMaps::Error, ArgumentError => e
+      OvertureMaps::RakeUI.abort!("Error: #{e.message}")
+    end
+
+    desc "Search for geographic divisions"
+    task :search_divisions, [:query] do |_t, args|
+      query = args[:query] or OvertureMaps::RakeUI.abort!(
+        "Usage: rails overture_maps:download:search_divisions[query]"
+      )
+
+      results = OvertureMaps::Import::Downloader.search_divisions(
+        query: query, release: OvertureMaps::RakeUI.release_arg
+      )
+      if results.empty?
+        puts "No divisions found matching '#{query}'"
+      else
+        puts "Results:"
+        OvertureMaps::RakeUI.print_divisions(results)
+      end
+    rescue OvertureMaps::Error => e
+      OvertureMaps::RakeUI.abort!("Error: #{e.message}")
+    end
+
+    desc "List available Overture releases"
+    task :versions do
+      releases = OvertureMaps::Releases.all
+      puts "Available releases:"
+      releases.each_with_index do |release, i|
+        puts "  - #{release}#{i.zero? ? "  (latest)" : ""}"
+      end
+    rescue OvertureMaps::Error => e
+      OvertureMaps::RakeUI.abort!("Error: #{e.message}")
+    end
+
+    desc "List available themes and their types"
+    task :themes do
+      OvertureMaps::Import::Downloader.themes_with_types.each do |theme, types|
+        puts "  - #{theme}"
+        types.each { |t| puts "      #{t}" }
+      end
+    end
+
+    desc "List types available for a theme in the current release"
+    task :types, [:theme] do |_t, args|
+      theme = args[:theme] || "places"
+      types = OvertureMaps::Import::Downloader.list_types(
+        theme: theme, release: OvertureMaps::RakeUI.release_arg
+      )
+      puts "Available types for #{theme}:"
+      types.each { |t| puts "  - #{t}" }
+    rescue OvertureMaps::Error => e
+      OvertureMaps::RakeUI.abort!("Error: #{e.message}")
+    end
+
+    desc "List files for a theme/type without downloading"
+    task :list, [:theme, :type, :release] do |_t, args|
+      downloader = OvertureMaps::Import::Downloader.new(
+        theme: args[:theme] || "places", type: args[:type],
+        release: args[:release] || OvertureMaps::RakeUI.release_arg
+      )
+      files = downloader.list_files
+      if files.empty?
+        puts "No files found"
+      else
+        files.each do |f|
+          puts "  #{File.basename(f[:key])} (#{OvertureMaps::Util.format_size(f[:size])})"
+        end
+        puts "Total: #{files.count} file(s)"
+      end
+    rescue OvertureMaps::Error => e
+      OvertureMaps::RakeUI.abort!("Error: #{e.message}")
+    end
+  end
+
+  namespace :categories do
+    CATEGORIES_CSV_URL = "https://raw.githubusercontent.com/OvertureMaps/schema/main/docs/schema/concepts/by-theme/places/overture_categories.csv"
+
+    desc "Populate the categories taxonomy from the Overture schema repo"
+    task populate: :environment do
+      require "csv"
+
+      begin
+        OvertureCategory
+      rescue NameError
+        OvertureMaps::RakeUI.abort!("OvertureCategory model not found. Run: rails generate overture_maps:install")
+      end
+
+      puts "Fetching categories from the Overture Maps taxonomy..."
+      body = OvertureMaps::Storage.get(CATEGORIES_CSV_URL)
+
+      count = 0
+      skipped = 0
+      CSV.parse(body, headers: true, col_sep: ";").each do |row|
+        name = row[0]&.strip
+        taxonomy_str = row[1]&.strip
+
+        if name.nil? || name.empty? || taxonomy_str.nil? || taxonomy_str.empty?
+          skipped += 1 unless name.nil? && taxonomy_str.nil?
+          next
+        end
+
+        taxonomy = taxonomy_str.gsub(/[\[\]]/, "").split(",").map(&:strip)
+        category = OvertureCategory.find_or_initialize_by(name: name)
+        category.update!(
+          primary_category: taxonomy.first,
+          hierarchy_level: taxonomy.size - 1
+        )
+        count += 1
+      end
+
+      puts "Imported #{count} categories#{skipped.positive? ? " (skipped #{skipped} malformed rows)" : ""}."
+      puts "\nPrimary categories:"
+      OvertureCategory.primary_categories.each { |pc| puts "  - #{pc}" }
+    rescue OvertureMaps::Error => e
+      OvertureMaps::RakeUI.abort!("Error: #{e.message}")
+    end
+
+    desc "List all categories grouped by primary category"
+    task list: :environment do
+      OvertureCategory.primary_categories.each do |pc|
+        puts "  - #{pc}"
+        OvertureCategory.by_primary(pc).order(:hierarchy_level, :name).each do |cat|
+          puts "      #{cat.name}"
+        end
+      end
+    end
+
+    desc "List primary categories only"
+    task primary: :environment do
+      OvertureCategory.primary_categories.each { |pc| puts pc }
+    end
   end
 end

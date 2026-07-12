@@ -5,7 +5,6 @@ module OvertureMaps
     class Building < Base
       self.table_name = "overture_buildings"
 
-      # Scope: by height range
       scope :by_height, ->(min: nil, max: nil) {
         query = all
         query = query.where("height >= ?", min) if min
@@ -13,17 +12,23 @@ module OvertureMaps
         query
       }
 
-      # Scope: by level range
-      scope :by_level, ->(min: nil, max: nil) {
+      scope :by_floors, ->(min: nil, max: nil) {
         query = all
-        query = query.where("level >= ?", min) if min
-        query = query.where("level <= ?", max) if max
+        query = query.where("num_floors >= ?", min) if min
+        query = query.where("num_floors <= ?", max) if max
         query
       }
 
-      # Scope: has height data
+      scope :by_class, ->(building_class) {
+        where(building_class: building_class)
+      }
+
       scope :with_height, -> {
         where("height IS NOT NULL AND height > 0")
+      }
+
+      scope :underground, -> {
+        where(is_underground: true)
       }
     end
   end

@@ -1,11 +1,16 @@
 # frozen_string_literal: true
 
+require "fileutils"
+
 module OvertureMaps
   module Import
+    # Downloads Overture data: whole theme files via anonymous HTTP, and
+    # bbox-filtered extracts via DuckDB (which pushes the bbox predicate down
+    # to parquet row-group statistics, so only the relevant slice of the
+    # dataset is transferred).
     class Downloader
       THEMES = %w[addresses base buildings divisions places transportation].freeze
 
-      # Feature types within each theme
       TYPES = {
         "addresses" => %w[address],
         "base" => %w[bathymetry infrastructure land land_cover land_use water],
@@ -15,620 +20,197 @@ module OvertureMaps
         "transportation" => %w[connector segment]
       }.freeze
 
-      DUCKDB_VERSION = "1.1.0"
-      S3_BUCKET = "overturemaps-us-west-2"
-      S3_REGION = "us-west-2"
-      AZURE_ACCOUNT = "overturemapswestus2"
-      AZURE_CONTAINER = "release"
+      # division_area subtypes worth surfacing in a name search, roughly
+      # largest to smallest.
+      DIVISION_SUBTYPES = %w[country dependency region county localadmin locality borough neighborhood].freeze
 
-      attr_reader :theme, :type, :version, :output_dir
+      EXTRACT_FORMATS = {
+        "parquet" => "parquet",
+        "geojson" => "geojson",
+        "geojsonseq" => "geojsonseq",
+        "gpkg" => "gpkg",
+        "geopackage" => "gpkg"
+      }.freeze
 
-      def initialize(theme:, type: nil, version: nil, output_dir: nil)
+      attr_reader :theme, :type, :release, :output_dir
+
+      def initialize(theme:, type: nil, release: nil, output_dir: nil)
+        raise ArgumentError, "unknown theme: #{theme}" unless THEMES.include?(theme)
+        raise ArgumentError, "unknown type #{type} for #{theme}" if type && !TYPES[theme].include?(type)
+
         @theme = theme
         @type = type
-        @version = version || self.class.latest_version
-        @output_dir = output_dir || Dir.pwd
+        @release = Releases.validate!(release || Releases.current)
+        @output_dir = output_dir || OvertureMaps.configuration.cache_dir
       end
 
-      # Get types for a theme
       def self.types_for_theme(theme)
         TYPES[theme] || []
       end
 
-      # Get all themes with their types
       def self.themes_with_types
         TYPES
       end
 
-      # Download files from S3
-      def download_from_s3
-        require "aws-sdk-s3"
-
-        # For public buckets, use unsigned requests by setting stub credentials
-        # and disabling signature verification
-        Aws.config.update(
-          region: S3_REGION,
-          credentials: Aws::Credentials.new("x", "x")
-        )
-        s3 = Aws::S3::Client.new
-        bucket = S3_BUCKET
-
-        objects = list_s3_objects(s3, bucket)
-
-        if objects.empty?
-          puts "No files found for #{theme}#{type ? "/#{type}" : ""}"
+      # Downloads the complete parquet files for this theme/type. These are
+      # large (buildings alone is hundreds of GB globally) — bbox extracts
+      # are almost always what you want instead.
+      def download_theme_files
+        files = list_files
+        if files.empty?
+          log "No files found for #{theme}#{type ? "/#{type}" : ""} in #{release}"
           return 0
         end
 
-        puts "Found #{objects.count} file(s) to download..."
-        puts
+        log "Found #{files.count} file(s) to download..."
+        FileUtils.mkdir_p(output_dir)
 
-        objects.each do |obj|
-          key = obj.key
-          filename = File.basename(key)
+        files.each do |file|
+          filename = File.basename(file[:key])
           local_path = File.join(output_dir, filename)
 
-          # Skip if file exists (allow resume)
-          if File.exist?(local_path) && File.size(local_path) == obj.size
-            puts "Skipping #{filename} (already exists)"
-            next
-          end
-
-          puts "Downloading #{filename} (#{format_size(obj.size)})..."
-          s3.get_object(
-            bucket: bucket,
-            key: key,
-            response_target: local_path
-          )
-          puts "  Saved to #{local_path}"
-        end
-
-        puts
-        puts "Download complete!"
-        objects.count
-      rescue LoadError
-        raise Error, "AWS SDK not installed. Run: gem install aws-sdk-s3"
-      end
-
-      # Download files from Azure Blob Storage
-      def download_from_azure
-        require "azure/storage/blob"
-
-        access_key = ENV["AZURE_STORAGE_ACCESS_KEY"]
-        unless access_key
-          raise Error, "AZURE_STORAGE_ACCESS_KEY environment variable not set"
-        end
-
-        blob_service = Azure::Storage::Blob::BlobService.create(
-          storage_account_name: AZURE_ACCOUNT,
-          storage_access_key: access_key
-        )
-
-        container = AZURE_CONTAINER
-        prefix = build_blob_prefix
-
-        blobs = list_blobs(blob_service, container, prefix)
-
-        if blobs.empty?
-          puts "No files found for #{theme}#{type ? "/#{type}" : ""}"
-          return 0
-        end
-
-        puts "Found #{blobs.count} file(s) to download..."
-        puts
-
-        blobs.each do |blob|
-          filename = blob.name.split("/").last
-          local_path = File.join(output_dir, filename)
-
-          puts "Downloading #{filename}..."
-          blob_service.get_blob_to_path(container, blob.name, local_path)
-          puts "  Saved to #{local_path}"
-        end
-
-        puts
-        puts "Download complete!"
-        blobs.count
-      rescue LoadError
-        raise Error, "Azure SDK not installed. Run: gem install azure-storage-blob"
-      rescue Azure::Storage::Error => e
-        raise Error, "Azure download failed: #{e.message}"
-      end
-
-      # Download data for a geographic bounding box using DuckDB
-      # This is more efficient than downloading all files as it filters server-side
-      def download_from_s3_with_bbox(lat1:, lng1:, lat2:, lng2:, format: "parquet", display_name: nil)
-        self.class.ensure_duckdb_cli!
-
-        # Normalize coordinates (handle cases where user passes corners in any order)
-        min_lat = [lat1, lat2].min
-        max_lat = [lat1, lat2].max
-        min_lng = [lng1, lng2].min
-        max_lng = [lng1, lng2].max
-
-        # Build the query
-        types_to_query = type ? [type] : TYPES[theme] || []
-
-        output_files = []
-        types_to_query.each do |t|
-          puts "Querying #{theme}/#{t}..."
-
-          query = build_bbox_query(t, min_lat, max_lat, min_lng, max_lng)
-
-          # Use display_name in filename if provided, otherwise use coordinates
-          filename_suffix = display_name || "#{min_lat}_#{max_lat}_#{min_lng}_#{max_lng}"
-          filename = "#{theme}_#{t}_#{filename_suffix}.#{format_extension(format)}"
-          local_path = File.join(output_dir, filename)
-
-          puts "  Exporting to #{filename}..."
-          run_duckdb_query(query, local_path, format)
-
-          if File.exist?(local_path) && File.size(local_path) > 0
-            output_files << local_path
-            puts "  Saved #{format_size(File.size(local_path))}"
+          result = Storage.download(file[:key], to: local_path, expected_size: file[:size])
+          if result == :skipped
+            log "Skipping #{filename} (already exists)"
           else
-            puts "  No data found"
+            log "Downloaded #{filename} (#{Util.format_size(file[:size])})"
           end
         end
 
-        puts
-        puts "Download complete!"
-        output_files.count
+        files.count
       end
 
-      # Download data for a center point and radius using DuckDB
-      def download_from_s3_nearby(center_lat:, center_lng:, radius_meters:, format: "parquet")
-        # Convert radius to approximate lat/lng delta
-        # 1 degree latitude ≈ 111,000 meters
-        # 1 degree longitude ≈ 111,000 * cos(latitude) meters
+      # Writes a bbox-filtered extract for one type to a local file and
+      # returns its path (nil when the area has no data). The extract is
+      # named by theme/type/release/area, so later runs reuse it as a cache.
+      def extract_bbox(bbox, format: "parquet", output_path: nil)
+        target_type = type or raise ArgumentError, "extract_bbox requires a type"
+        path = output_path || extract_path(bbox, format: format)
+        FileUtils.mkdir_p(File.dirname(path))
 
-        lat_delta = radius_meters.to_f / 111_000
-        lng_delta = radius_meters.to_f / (111_000 * Math.cos(Math.radians(center_lat)))
+        sql, params = self.class.bbox_query(theme: theme, type: target_type, release: release, bbox: bbox)
+        QueryEngine.instance.copy_to(sql, params: params, output_path: path,
+                                     format: EXTRACT_FORMATS.fetch(format.to_s.downcase, "parquet"))
 
-        min_lat = center_lat - lat_delta
-        max_lat = center_lat + lat_delta
-        min_lng = center_lng - lng_delta
-        max_lng = center_lng + lng_delta
-
-        download_from_s3_with_bbox(
-          lat1: min_lat,
-          lng1: min_lng,
-          lat2: max_lat,
-          lng2: max_lng,
-          format: format
-        )
-      end
-
-      # List available files (without downloading)
-      def list_files(provider: :s3)
-        case provider
-        when :s3
-          list_files_from_s3
-        when :azure
-          list_files_from_azure
+        if File.exist?(path) && File.size(path).positive?
+          path
         else
-          raise ArgumentError, "Unknown provider: #{provider}"
+          FileUtils.rm_f(path)
+          nil
         end
       end
 
-      # Get the S3 URI pattern for this theme/type
-      def s3_uri_pattern
-        base = "s3://#{S3_BUCKET}/release/#{version}"
-        "#{base}/theme=#{theme}#{type ? "/type=#{type}" : ""}/*.parquet"
+      # Extracts every type in the theme for a bbox. Returns the paths written.
+      def extract_bbox_all_types(bbox, format: "parquet")
+        types = type ? [type] : TYPES.fetch(theme)
+        types.filter_map do |t|
+          log "Querying #{theme}/#{t} (#{release})..."
+          path = self.class.new(theme: theme, type: t, release: release, output_dir: output_dir)
+                     .extract_bbox(bbox, format: format)
+          log(path ? "  Saved #{File.basename(path)} (#{Util.format_size(File.size(path))})" : "  No data found")
+          path
+        end
       end
 
-      # Get the Azure URI pattern for this theme/type
-      def azure_uri_pattern
-        base = "https://#{AZURE_ACCOUNT}.blob.core.windows.net/#{AZURE_CONTAINER}/release/#{version}"
-        "#{base}/theme=#{theme}#{type ? "/type=#{type}" : ""}/*.parquet"
+      def extract_nearby(lat:, lng:, radius_meters:, format: "parquet")
+        extract_bbox_all_types(BoundingBox.around(lat: lat, lng: lng, radius_meters: radius_meters), format: format)
       end
 
-      # List available types for a theme
-      def self.list_types(theme:, version: nil)
-        v = version || latest_version
-
-        require "aws-sdk-s3" unless defined?(Aws::S3::Client)
-
-        s3 = Aws::S3::Client.new(region: S3_REGION)
-        prefix = "release/#{v}/theme=#{theme}/type="
-
-        objects = s3.list_objects_v2(bucket: S3_BUCKET, prefix: prefix)
-        objects.contents.map { |o| o.key.split("/")[2]&.gsub("type=", "") }.compact.uniq.sort
-      rescue LoadError
-        raise Error, "AWS SDK not installed. Run: gem install aws-sdk-s3"
+      # The cache path for a bbox extract of this theme/type/release.
+      def extract_path(bbox, format: "parquet")
+        ext = EXTRACT_FORMATS.fetch(format.to_s.downcase, "parquet")
+        File.join(output_dir, "#{theme}_#{type}_#{release}_#{bbox.slug}.#{ext}")
       end
 
-      # List available themes
-      def self.list_themes
-        require "aws-sdk-s3" unless defined?(Aws::S3::Client)
-
-        s3 = Aws::S3::Client.new(region: S3_REGION)
-        prefix = "release/"
-
-        objects = s3.list_objects_v2(bucket: S3_BUCKET, prefix: prefix, delimiter: "/")
-        objects.common_prefixes.map { |o| o.prefix.split("/")[-2]&.gsub("theme=", "") }.compact.uniq.sort
-      rescue LoadError
-        raise Error, "AWS SDK not installed. Run: gem install aws-sdk-s3"
+      # An existing extract for this theme/type/release/area, or nil. Matches
+      # exactly — never falls back to "some other file for the theme".
+      def cached_extract(bbox, format: "parquet")
+        path = extract_path(bbox, format: format)
+        File.exist?(path) && File.size(path).positive? ? path : nil
       end
 
-      # List available versions
-      # Since S3 is public, we try common versions that are known to work
-      def self.list_versions
-        # These are known good versions from Overture Maps releases
-        [
-          "2025-06-16",
-          "2025-03-19",
-          "2025-01-17",
-          "2024-12-18",
-          "2024-11-13"
-        ]
+      def list_files
+        prefix = "release/#{release}/theme=#{theme}#{type ? "/type=#{type}" : ""}"
+        Storage.list(prefix: prefix)[:objects].select { |o| o[:key].end_with?(".parquet") }
       end
 
-      # Get the latest version
-      def self.latest_version
-        versions = list_versions
-        versions.first if versions.any?
+      def self.list_types(theme:, release: nil)
+        release = Releases.validate!(release || Releases.current)
+        listing = Storage.list(prefix: "release/#{release}/theme=#{theme}/", delimiter: "/")
+        listing[:prefixes].filter_map { |p| p[/type=([^\/]+)/, 1] }.sort
       end
 
-      # Search for divisions by name
-      def self.search_divisions(query:, version: nil)
-        ensure_duckdb_cli!
+      def self.list_themes(release: nil)
+        release = Releases.validate!(release || Releases.current)
+        listing = Storage.list(prefix: "release/#{release}/", delimiter: "/")
+        listing[:prefixes].filter_map { |p| p[/theme=([^\/]+)/, 1] }.sort
+      end
 
-        # Use recursive glob to search across all versions (divisions data may be in different versions)
+      # Searches division areas by name. Returns hashes with :id, :name,
+      # :subtype, :country, :region, :bbox (BoundingBox) and :area_km2,
+      # largest areas first.
+      def self.search_divisions(query:, release: nil, limit: 20)
+        release = Releases.validate!(release || Releases.current)
+        source = source_glob(theme: "divisions", type: "division_area", release: release)
+        placeholders = DIVISION_SUBTYPES.map { "?" }.join(", ")
+
         sql = <<~SQL
-          INSTALL spatial;
-          LOAD spatial;
-          SET s3_region='us-west-2';
-          SELECT id, names.primary as name, subtype, country, region, population, bbox.xmin, bbox.xmax, bbox.ymin, bbox.ymax,
-                 (bbox.xmax - bbox.xmin) * (bbox.ymax - bbox.ymin) as bbox_area
-          FROM read_parquet('s3://overturemaps-us-west-2/release/**/theme=divisions/*/*.parquet', union_by_name=true)
-          WHERE names.primary ILIKE '%#{query}%'
-            AND subtype IN ('country', 'region', 'subregion', 'locality', 'macrohood', 'neighborhood')
-            AND bbox.xmax > bbox.xmin
-            AND bbox.ymax > bbox.ymin
-          ORDER BY bbox_area DESC
-          LIMIT 20
+          SELECT id, names.primary AS name, subtype, country, region,
+                 bbox.xmin AS xmin, bbox.xmax AS xmax, bbox.ymin AS ymin, bbox.ymax AS ymax
+          FROM read_parquet('#{source}', hive_partitioning=1)
+          WHERE names.primary ILIKE ?
+            AND subtype IN (#{placeholders})
+            AND bbox.xmax > bbox.xmin AND bbox.ymax > bbox.ymin
+          ORDER BY (bbox.xmax - bbox.xmin) * (bbox.ymax - bbox.ymin) DESC
+          LIMIT #{Integer(limit)}
         SQL
 
-        results = run_duckdb_sql(sql)
-        results.map do |row|
-          # Calculate approximate area in km²
-          ymin = row["ymin"].to_f
-          ymax = row["ymax"].to_f
-          xmin = row["xmin"].to_f
-          xmax = row["xmax"].to_f
-
-          lat_center = (ymin + ymax) / 2.0
-          km_per_deg_lat = 111.0
-          km_per_deg_lng = 111.0 * Math.cos(lat_center * Math::PI / 180.0)
-
-          width_km = (xmax - xmin) * km_per_deg_lng
-          height_km = (ymax - ymin) * km_per_deg_lat
-          area_km2 = (width_km * height_km).round(2)
-
+        rows = QueryEngine.instance.query(sql, ["%#{query}%"] + DIVISION_SUBTYPES)
+        rows.map do |row|
+          bbox = BoundingBox.new(
+            lat1: row["ymin"], lng1: row["xmin"],
+            lat2: row["ymax"], lng2: row["xmax"],
+            display_name: row["name"]
+          )
           {
             id: row["id"],
-            name: row["name"] || query,
+            name: row["name"],
             subtype: row["subtype"],
             country: row["country"],
             region: row["region"],
-            population: row["population"],
-            bbox: {
-              "xmin" => row["xmin"],
-              "xmax" => row["xmax"],
-              "ymin" => row["ymin"],
-              "ymax" => row["ymax"]
-            },
-            bbox_area: row["bbox_area"],
-            area_km2: area_km2
+            bbox: bbox,
+            area_km2: Util.bbox_area_km2(bbox)
           }
         end
       end
 
-      # Get bbox from a division ID
-      def self.get_division_bbox(division_id:, version: nil)
-        ensure_duckdb_cli!
+      # Builds the bbox-filtered SELECT for one theme/type. Intersection
+      # semantics: any feature whose bbox overlaps the query box is included,
+      # matching what "give me this area" means (the old strict-containment
+      # filter silently dropped everything touching the boundary).
+      def self.bbox_query(theme:, type:, release:, bbox:)
+        raise ArgumentError, "unknown theme: #{theme}" unless THEMES.include?(theme)
+        raise ArgumentError, "unknown type #{type} for #{theme}" unless TYPES[theme].include?(type)
 
+        source = source_glob(theme: theme, type: type, release: Releases.validate!(release))
         sql = <<~SQL
-          INSTALL spatial;
-          LOAD spatial;
-          SET s3_region='us-west-2';
-          SELECT bbox FROM read_parquet('s3://overturemaps-us-west-2/release/**/theme=divisions/*/*.parquet', union_by_name=true)
-          WHERE id = '#{division_id}'
-          LIMIT 1
+          SELECT *
+          FROM read_parquet('#{source}', hive_partitioning=1)
+          WHERE bbox.xmin <= ? AND bbox.xmax >= ?
+            AND bbox.ymin <= ? AND bbox.ymax >= ?
         SQL
-
-        result = run_duckdb_sql(sql).first
-        result&.fetch("bbox")
+        [sql, [bbox.max_lng, bbox.min_lng, bbox.max_lat, bbox.min_lat]]
       end
 
-      # Ensure DuckDB CLI is available, download if needed
-      def self.ensure_duckdb_cli!
-        return if duckdb_cli_path
-
-        puts "Downloading DuckDB CLI..."
-        arch = RUBY_PLATFORM =~ /darwin/ ? "duckdb_cli-osx-universal" : "duckdb_cli-linux-amd64"
-        url = "https://github.com/duckdb/duckdb/releases/download/v#{DUCKDB_VERSION}/#{arch}.zip"
-
-        zip_path = "/tmp/duckdb.zip"
-        File.binwrite(zip_path, Net::HTTP.get(URI(url)))
-        system("unzip -o -j #{zip_path} -d /tmp/duckdb/ 2>/dev/null && chmod +x /tmp/duckdb/duckdb")
-        File.delete(zip_path) if File.exist?(zip_path)
-
-        raise "Failed to download DuckDB CLI" unless duckdb_cli_path && File.executable?(duckdb_cli_path)
-      end
-
-      def self.duckdb_cli_path
-        return @duckdb_path if @duckdb_path && File.executable?(@duckdb_path)
-
-        # Check common locations
-        paths = ["/tmp/duckdb/duckdb", "duckdb"]
-        paths += `which duckdb 2>/dev/null`.split if `which duckdb 2>/dev/null`.present?
-
-        @duckdb_path = paths.find { |p| File.executable?(p) }
-      end
-
-      # Run a DuckDB query that exports to a file
-      def run_duckdb_query(query, output_path, format)
-        require "tempfile"
-        require "open3"
-
-        # Use native Parquet export instead of GDAL for better compatibility
-        copy_sql = if format.to_s.downcase == "parquet"
-          "COPY (#{query}) TO '#{output_path}' (FORMAT PARQUET);"
-        else
-          driver = gdal_driver(format)
-          "COPY (#{query}) TO '#{output_path}' WITH (FORMAT GDAL, DRIVER '#{driver}');"
-        end
-
-        sql = <<~SQL
-          INSTALL spatial;
-          LOAD spatial;
-          SET s3_region='us-west-2';
-          #{copy_sql}
-        SQL
-
-        # Write SQL to temp file
-        sql_file = Tempfile.new(["overture_query", ".sql"])
-        sql_file.write(sql)
-        sql_file.close
-
-        # Run query from file
-        cmd = "#{self.class.duckdb_cli_path} < #{sql_file.path} 2>&1"
-        output, status = Open3.capture2(cmd)
-
-        sql_file.unlink
-
-        raise "DuckDB error: #{output}" unless status.success?
-      end
-
-      def self.run_duckdb_sql(sql, output_path: nil)
-        require "json"
-        require "tempfile"
-        require "open3"
-
-        # Write SQL to a temp file
-        sql_file = Tempfile.new(["overture_query", ".sql"])
-        sql_file.write(sql)
-        sql_file.close
-
-        # Run query from file using Open3 for proper output capture
-        cmd = "#{duckdb_cli_path} -json < #{sql_file.path} 2>/dev/null"
-        output, status = Open3.capture2(cmd)
-
-        sql_file.unlink
-
-        raise "DuckDB error: #{output}" unless status.success?
-
-        # Parse JSON output - DuckDB outputs a JSON array
-        output = output.strip
-        return [] if output.empty?
-
-        JSON.parse(output)
-      end
-
-      # Download data for a division (uses DuckDB to get bbox from division shape)
-      def download_for_division(division_name:, format: "parquet")
-        # Search for the division
-        results = self.class.search_divisions(query: division_name, version: version)
-
-        if results.empty?
-          raise Error, "No divisions found matching '#{division_name}'"
-        end
-
-        if results.count == 1
-          selected = results.first
-          location_info = [selected[:country], selected[:region]].compact.join(" / ")
-          puts "Found: #{selected[:name]} (#{selected[:subtype]})"
-          puts "  Location: #{location_info}" unless location_info.empty?
-        else
-          puts "Multiple matches found for '#{division_name}':"
-          results.each_with_index do |r, i|
-            location_info = [r[:country], r[:region]].compact.join(" / ")
-            area_info = r[:area_km2] && r[:area_km2] > 0 ? " (#{r[:area_km2]} km²)" : ""
-            puts "  #{i + 1}. #{r[:name]} (#{r[:subtype]}) - #{location_info}#{area_info}"
-          end
-          puts
-          print "Enter number to select (or 'q' to quit): "
-          input = $stdin.gets&.strip
-
-          if input == 'q' || input.nil?
-            puts "Cancelled."
-            exit 0
-          end
-
-          idx = input.to_i - 1
-          unless idx >= 0 && idx < results.count
-            puts "Invalid selection."
-            exit 1
-          end
-
-          selected = results[idx]
-          location_info = [selected[:country], selected[:region]].compact.join(" / ")
-          puts "Selected: #{selected[:name]} (#{location_info})"
-        end
-
-        bbox = selected[:bbox]
-        unless bbox
-          # Try to get bbox from the division_id
-          bbox = self.class.get_division_bbox(division_id: selected[:id], version: version)
-        end
-
-        unless bbox
-          raise Error, "Could not get bounding box for '#{selected[:name]}'"
-        end
-
-        # Extract bbox values
-        min_lat = bbox["ymin"]
-        max_lat = bbox["ymax"]
-        min_lng = bbox["xmin"]
-        max_lng = bbox["xmax"]
-
-        puts "Bounding box: #{min_lat}, #{min_lng} to #{max_lat}, #{max_lng}"
-        puts
-
-        # Download data for this bbox
-        download_from_s3_with_bbox(
-          lat1: min_lat,
-          lng1: min_lng,
-          lat2: max_lat,
-          lng2: max_lng,
-          format: format
-        )
+      def self.source_glob(theme:, type:, release:)
+        "#{OvertureMaps.configuration.s3_uri.chomp("/")}/release/#{release}/theme=#{theme}/type=#{type}/*.parquet"
       end
 
       private
 
-      def build_s3_prefix
-        "release/#{version}/theme=#{theme}#{type ? "/type=#{type}" : ""}"
-      end
-
-      def build_blob_prefix
-        "release/#{version}/theme=#{theme}#{type ? "/type=#{type}" : ""}"
-      end
-
-      def build_bbox_query(type, min_lat, max_lat, min_lng, max_lng)
-        # Select common columns plus geometry
-        columns = case theme
-        when "places"
-          "*"
-        when "buildings"
-          "id, names, height, level, class, is_underground, geometry"
-        when "addresses"
-          "*"
-        when "divisions"
-          "*"
-        when "base"
-          "*"
-        when "transportation"
-          "*"
-        else
-          "*"
-        end
-
-        <<~SQL.squish
-          SELECT #{columns}
-          FROM read_parquet('s3://overturemaps-us-west-2/release/**/theme=#{theme}/type=#{type}/*', union_by_name=true)
-          WHERE bbox.xmin > #{min_lng}
-            AND bbox.xmax < #{max_lng}
-            AND bbox.ymin > #{min_lat}
-            AND bbox.ymax < #{max_lat}
-        SQL
-      end
-
-      def format_extension(format)
-        case format.downcase
-        when "geojson" then "geojson"
-        when "gpkg", "geopackage" then "gpkg"
-        when "shp", "shapefile" then "shp"
-        else "parquet"
-        end
-      end
-
-      def gdal_driver(format)
-        case format.downcase
-        when "geojson" then "GeoJSON"
-        when "gpkg", "geopackage" then "GPKG"
-        when "shp", "shapefile" then "ESRI Shapefile"
-        else "Parquet"
-        end
-      end
-
-      def list_s3_objects(s3, bucket)
-        prefix = build_s3_prefix
-        objects = s3.list_objects_v2(bucket: bucket, prefix: prefix)
-        objects.contents.select { |o| o.key.end_with?(".parquet") }
-      end
-
-      def list_files_from_s3
-        require "aws-sdk-s3" unless defined?(Aws::S3::Client)
-
-        s3 = Aws::S3::Client.new(region: S3_REGION)
-        objects = list_s3_objects(s3, S3_BUCKET)
-
-        objects.map do |obj|
-          {
-            key: obj.key,
-            size: obj.size,
-            last_modified: obj.last_modified
-          }
-        end
-      rescue LoadError
-        raise Error, "AWS SDK not installed. Run: gem install aws-sdk-s3"
-      end
-
-      def list_files_from_azure
-        require "azure/storage/blob" unless defined?(Azure::Storage::Blob)
-
-        access_key = ENV["AZURE_STORAGE_ACCESS_KEY"]
-        unless access_key
-          raise Error, "AZURE_STORAGE_ACCESS_KEY environment variable not set"
-        end
-
-        blob_service = Azure::Storage::Blob::BlobService.create(
-          storage_account_name: AZURE_ACCOUNT,
-          storage_access_key: access_key
-        )
-
-        blobs = list_blobs(blob_service, AZURE_CONTAINER, build_blob_prefix)
-
-        blobs.map do |blob|
-          {
-            key: blob.name,
-            size: blob.properties[:content_length],
-            last_modified: blob.properties[:last_modified]
-          }
-        end
-      rescue LoadError
-        raise Error, "Azure SDK not installed. Run: gem install azure-storage-blob"
-      rescue Azure::Storage::Error => e
-        raise Error, "Azure listing failed: #{e.message}"
-      end
-
-      def list_blobs(blob_service, container, prefix)
-        blobs = []
-        marker = nil
-
-        loop do
-          result = blob_service.list_blobs(container, marker: marker, prefix: prefix)
-          blobs.concat(result.blobs)
-          break unless result.continuation_token
-          marker = result.continuation_token
-        end
-
-        blobs.select { |b| b.name.end_with?(".parquet") }
-      end
-
-      def format_size(bytes)
-        if bytes >= 1_073_741_824
-          "#{(bytes / 1_073_741_824.0).round(2)} GB"
-        elsif bytes >= 1_048_576
-          "#{bytes / 1_048_576.0.round(2)} MB"
-        elsif bytes >= 1024
-          "#{bytes / 1024.0.round(2)} KB"
-        else
-          "#{bytes} bytes"
-        end
+      def log(message)
+        logger = OvertureMaps.configuration.logger
+        logger ? logger.info(message) : puts(message)
       end
     end
   end

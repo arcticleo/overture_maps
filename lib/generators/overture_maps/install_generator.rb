@@ -1,41 +1,25 @@
 # frozen_string_literal: true
 
-require "rails/generators/base"
+require "generators/overture_maps/base_generator"
 
 module OvertureMaps
   module Generators
-    class InstallGenerator < Rails::Generators::Base
-      source_root File.expand_path("../templates", __dir__)
+    class InstallGenerator < BaseGenerator
+      desc "Creates the PostGIS extension, Overture tables, and model files"
 
       def create_migrations
-        puts "Creating Overture Maps migrations..."
-
-        # Get current timestamp for migration
-        timestamp = Time.now.strftime("%Y%m%d%H%M%S")
-
-        # Create PostGIS extension migration
-        copy_file "postgis_migration.rb.tt", "db/migrate/#{timestamp}_create_overture_postgis.rb"
-
-        # Create categories migration
-        copy_file "category_migration.rb.tt", "db/migrate/#{timestamp.succ}_create_overture_categories.rb"
-
-        # Create places migration
-        copy_file "place_migration.rb.tt", "db/migrate/#{timestamp.succ.succ}_create_overture_places.rb"
-
-        # Create buildings migration
-        copy_file "building_migration.rb.tt", "db/migrate/#{timestamp.succ.succ.succ}_create_overture_buildings.rb"
-
-        # Create addresses migration
-        copy_file "address_migration.rb.tt", "db/migrate/#{timestamp.succ.succ.succ.succ}_create_overture_addresses.rb"
+        migration_template "postgis_migration.rb.tt", "db/migrate/create_overture_postgis.rb"
+        migration_template "category_migration.rb.tt", "db/migrate/create_overture_categories.rb"
+        migration_template "place_migration.rb.tt", "db/migrate/create_overture_places.rb"
+        migration_template "building_migration.rb.tt", "db/migrate/create_overture_buildings.rb"
+        migration_template "address_migration.rb.tt", "db/migrate/create_overture_addresses.rb"
       end
 
       def create_models
-        puts "Creating Overture Maps models..."
-
-        copy_file "category_model.rb.tt", "app/models/overture_category.rb"
-        copy_file "place_model.rb.tt", "app/models/overture_place.rb"
-        copy_file "building_model.rb.tt", "app/models/overture_building.rb"
-        copy_file "address_model.rb.tt", "app/models/overture_address.rb"
+        template "category_model.rb.tt", "app/models/overture_category.rb"
+        template "place_model.rb.tt", "app/models/overture_place.rb"
+        template "building_model.rb.tt", "app/models/overture_building.rb"
+        template "address_model.rb.tt", "app/models/overture_address.rb"
       end
     end
   end

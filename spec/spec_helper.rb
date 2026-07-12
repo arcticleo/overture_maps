@@ -1,8 +1,11 @@
 # frozen_string_literal: true
 
 require "bundler/setup"
+require "active_record"
 require "overture_maps"
 require "webmock/rspec"
+require "tmpdir"
+require "logger"
 
 RSpec.configure do |config|
   config.expect_with :rspec do |expectations|
@@ -18,6 +21,10 @@ RSpec.configure do |config|
   config.example_status_persistence_file_path = "spec/examples.txt"
   config.disable_monkey_patching!
   config.warnings = false
+
+  config.after do
+    OvertureMaps.reset
+  end
 
   if config.files_to_run.one?
     config.default_formatter = "doc"

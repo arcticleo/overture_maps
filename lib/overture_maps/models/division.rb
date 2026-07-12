@@ -2,27 +2,25 @@
 
 module OvertureMaps
   module Models
+    # Table and importer arrive in Phase 2; the class is defined so app code
+    # can reference it once divisions are imported.
     class Division < Base
       self.table_name = "overture_divisions"
 
-      # Scope: by type
-      scope :by_type, ->(type) {
-        where(division_type: type)
+      scope :by_subtype, ->(subtype) {
+        where(subtype: subtype)
       }
 
-      # Scope: by ISO code
-      scope :by_iso_code, ->(iso_code) {
-        where(iso_code: iso_code)
+      scope :by_country, ->(country) {
+        where(country: country)
       }
 
-      # Scope: children of a parent
-      scope :children_of, ->(parent_id) {
-        where(parent_id: parent_id)
+      scope :children_of, ->(parent_division_id) {
+        where(parent_division_id: parent_division_id)
       }
 
-      # Scope: top-level (no parent)
-      scope :top_level, -> {
-        where(parent_id: nil)
+      scope :countries, -> {
+        where(subtype: "country")
       }
     end
   end

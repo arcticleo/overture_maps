@@ -2,4 +2,7 @@ source "https://rubygems.org"
 
 gemspec
 
-gem "parquet"
+group :development, :test do
+  # Native DuckDB bindings (optional at runtime; exercised in specs when present)
+  gem "duckdb"
+end

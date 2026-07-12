@@ -1,22 +1,18 @@
 # frozen_string_literal: true
 
+require "generators/overture_maps/base_generator"
+
 module OvertureMaps
   module Generators
-    class AddressGenerator < ::Rails::Generators::Base
-      source_root File.expand_path("templates", __dir__)
+    class AddressGenerator < BaseGenerator
+      desc "Creates the overture_addresses table and model"
 
       def create_migration
-        migration_template(
-          "address_migration.rb.tt",
-          "db/migrate/create_overture_addresses.rb"
-        )
+        migration_template "address_migration.rb.tt", "db/migrate/create_overture_addresses.rb"
       end
 
       def create_model
-        template(
-          "address_model.rb.tt",
-          "app/models/overture_address.rb"
-        )
+        template "address_model.rb.tt", "app/models/overture_address.rb"
       end
     end
   end

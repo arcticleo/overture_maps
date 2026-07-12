@@ -1,12 +1,14 @@
 # Overture Maps Ruby Gem
 
-A Ruby gem for integrating with [Overture Maps](https://overturemaps.org/) - an open map data foundation providing geospatial data. Import Parquet data files into your Rails application.
+A Ruby gem for integrating with [Overture Maps](https://overturemaps.org/) — an open map data foundation providing geospatial data. Download bbox-filtered extracts of Overture GeoParquet data and import them into your Rails application's PostGIS database.
 
 ## Features
 
-- **Data Import**: Import Parquet data files into your PostgreSQL/PostGIS database
-- **Rails Integration**: Model generators, rake tasks, and PostGIS utilities
-- **RGeo Support**: Full geometry support for geospatial queries
+- **Location-based import**: `rails overture_maps:import:places[Seattle]` — searches Overture divisions by name, downloads a bbox-filtered extract, and upserts it into PostGIS
+- **Efficient remote access**: DuckDB pushes bbox predicates down to parquet row-group statistics, so only the relevant slice of Overture's multi-hundred-GB datasets is transferred
+- **Idempotent imports**: rows are upserted by GERS id; re-running an import updates rather than fails
+- **Release-aware**: discovers the latest monthly Overture release via the official STAC catalog; extracts are cached per release and area
+- **Rails integration**: model generators, rake tasks, PostGIS utilities, RGeo geometries
 
 ## Installation
 
@@ -14,6 +16,11 @@ Add to your Rails application's Gemfile:
 
 ```ruby
 gem "overture_maps"
+
+# Recommended: native DuckDB bindings for the fastest remote queries.
+# Without this the gem falls back to the duckdb CLI (PATH lookup, then a
+# pinned download to ~/.cache/overture_maps).
+gem "duckdb"
 ```
 
 Then run:
@@ -22,263 +29,87 @@ Then run:
 bundle install
 ```
 
-### Build Dependencies
-
-The parquet and aws-sdk-s3 gems require native extensions:
-
-```bash
-sudo apt-get install -y cmake build-essential
-bundle install
-```
-
-The gem automatically downloads the DuckDB CLI binary when needed for bbox/division filtering.
-
 ## Getting Started
-
-### Install the Gem
-
-Add to your Gemfile and run `bundle install`.
 
 ### Generate Models and Migrations
 
 ```bash
 rails generate overture_maps:install
-```
-
-This creates:
-- Migration to enable the PostGIS extension
-- Migration for `overture_places` table
-- Migration for `overture_buildings` table
-- Migration for `overture_addresses` table
-- Migration for `overture_categories` table
-- Model files
-
-Then run migrations:
-
-```bash
 rails db:migrate
 ```
 
+This creates migrations for the PostGIS extension and the `overture_places`, `overture_buildings`, `overture_addresses`, and `overture_categories` tables, plus their model files. Individual generators also exist: `overture_maps:place`, `overture_maps:building`, `overture_maps:address`.
+
 ### Fetch Categories (Recommended)
 
-Before importing places, fetch the categories taxonomy:
-
 ```bash
-rails overture_maps:categories:populate
-```
-
-This fetches all ~2,100 categories from Overture Maps schema. You can then list them:
-
-```bash
-# List all categories
-rails overture_maps:categories:list
-
-# List just primary categories
-rails overture_maps:categories:primary
-```
-
-### Generate Individual Models
-
-```bash
-# Generate Place model
-rails generate overture_maps:place
-
-# Generate Building model
-rails generate overture_maps:building
-
-# Generate Address model
-rails generate overture_maps:address
+rails overture_maps:categories:populate   # ~2,100 categories from the Overture taxonomy
+rails overture_maps:categories:list       # list all
+rails overture_maps:categories:primary    # list primary categories
 ```
 
 ## Importing Data
 
-Import Overture Maps data directly into your Rails application's database.
-
-### Quick Start
-
-Import data for any city, state, or country by name:
-
 ```bash
+# By location name (searches Overture divisions; prompts if ambiguous)
 rails overture_maps:import:places[Seattle]
-```
-
-That's it! The gem will:
-1. Search for divisions matching "Seattle"
-2. Prompt you to select if multiple matches exist
-3. Stream data directly from S3 into your database with spatial filtering
-
-### Import by Location Name
-
-```bash
-# Import places for a city, state, or country
-rails overture_maps:import:places[Seattle]
-rails overture_maps:import:places[California]
-rails overture_maps:import:places[Germany]
-
-# For names with spaces, use quotes or escape the space
 rails "overture_maps:import:places[New York]"
-rails overture_maps:import:places[New\ York]
-```
 
-### Import by Bounding Box
+# By bounding box (underscore-separated lat/lng pairs)
+rails overture_maps:import:places[47.606_-122.336_47.609_-122.333]
 
-```bash
-# Import within a geographic bounding box (lat1,lng1,lat2,lng2)
-rails overture_maps:import:places[47.606,-122.336,47.609,-122.333]
-rails overture_maps:import:buildings[47.606,-122.336,47.609,-122.333]
-```
+# Filter places by Overture leaf categories
+rails "overture_maps:import:places[Seattle,cafe]"
+rails "overture_maps:import:places[Seattle,cafe restaurant]"
 
-### Import with Category Filtering
-
-```bash
-# Import only food & drink establishments
-rails overture_maps:import:places[Seattle,eat_and_drink]
-
-# Import multiple categories
-rails overture_maps:import:places[Seattle,"eat_and_drink,shopping"]
-
-# See available primary categories
-rails overture_maps:categories:primary
-```
-
-### Import Buildings and Addresses
-
-```bash
+# Other themes
 rails overture_maps:import:buildings[Seattle]
 rails overture_maps:import:addresses[Seattle]
-```
 
-### Import All Themes
-
-```bash
-# Import all themes for a location
+# Everything (resolves the location once, then imports each theme)
 rails overture_maps:import:all[Seattle]
-
-# Import all themes using bounding box (use underscores)
-rails overture_maps:import:all[47.606_-122.336_47.609_-122.333]
 ```
 
-### How Import Works
+How it works:
 
-When you run an import task:
+1. The location is parsed as a bounding box, or matched against Overture division areas by name (you're prompted when several match).
+2. A bbox-filtered parquet extract is downloaded via DuckDB into `tmp/overture/`, named by theme, type, release, and area — reruns for the same release and area reuse it (you're prompted; non-interactive runs reuse automatically).
+3. Records are upserted in batches, keyed on their GERS id.
 
-1. **Search**: The gem searches for geographic divisions matching your location name
-2. **Select**: If multiple matches are found, you'll be prompted to select the correct one
-3. **Local File Check**: If a previously downloaded file exists for this location, you'll be asked:
-   - `y` - Import from local file (faster)
-   - `n` - Cancel
-   - `download` - Download fresh data from S3 (may be newer)
-4. **S3 Import**: If no local file exists, data is streamed directly from S3 with spatial filtering using DuckDB
-
-### Search Divisions First
-
-Not sure of the exact name? Search first:
+Useful companions:
 
 ```bash
-rails overture_maps:import:search[Seattle]
-
-# Then import using the exact name from the results
-rails overture_maps:import:places[Seattle]
+rails overture_maps:import:search[Seattle]   # see matching divisions first
+rails overture_maps:import:stats             # row counts per table
+OVERTURE_RELEASE=2026-05-21.0 rails overture_maps:import:places[Seattle]  # pin a release
+OVERTURE_NON_INTERACTIVE=1 ...               # never prompt (jobs/CI)
+IGNORE_ERRORS=1 ...                          # exit 0 despite row errors
+VERBOSE=1 ...                                # print row error details
 ```
 
-### Check Import Statistics
+## Downloading Data (without importing)
 
 ```bash
-rails overture_maps:import:stats
-```
-
-### List Available Versions
-
-```bash
-rails overture_maps:import:versions
-```
-
----
-
-## Downloading Data (Optional)
-
-**Download is optional.** Import tasks stream data directly from S3 by default. Use download tasks when you want to:
-
-- Keep raw Parquet files locally for offline use
-- Re-import the same data multiple times without re-downloading
-- Work with the data outside of Rails (e.g., in QGIS, pandas, etc.)
-
-### Download by Location Name
-
-```bash
-# Download places for a city
+# Bbox extracts for a location, one file per feature type
 rails overture_maps:download:places[Seattle]
+rails overture_maps:download:buildings[47.606_-122.336_47.609_-122.333]
 
-# Download buildings for a geographic area
-rails overture_maps:download:buildings[California]
+# Explicit bbox / point + radius
+rails overture_maps:download:bbox[places,47.606,-122.336,47.609,-122.333]
+rails overture_maps:download:nearby[places,47.6062,-122.3321,5000]
 
-# Download addresses for a country
-rails overture_maps:download:addresses[Germany]
+# Export formats other than parquet
+rails "overture_maps:download:bbox[places,47.6,-122.4,47.7,-122.2,place,,,geojson]"
 
-# For names with spaces
-rails "overture_maps:download:places[New York]"
-```
-
-### Download by Bounding Box
-
-```bash
-# Download places within a bounding box
-rails overture_maps:download:bbox[places,49.5,-125,47,-121]
-
-# Download near a center point (lat, lng, radius in meters)
-rails overture_maps:download:nearby[places,40.7128,-74.006,10000]
-```
-
-### Download Complete Theme Files
-
-```bash
-# Download all places data files (global - large!)
+# Complete theme files (no location argument — very large!)
 rails overture_maps:download:places
 
-# Download specific theme files
-rails overture_maps:download:buildings
-rails overture_maps:download:addresses
-rails overture_maps:download:transportation
-
-# Download from Azure instead of S3
-rails overture_maps:download:azure:places
-```
-
-### Using Downloaded Files
-
-Once you've downloaded data, the import task will automatically detect it:
-
-```bash
-# Download once
-rails overture_maps:download:places[Seattle]
-
-# Import will prompt to use the local file
-rails overture_maps:import:places[Seattle]
-# → Found local file: tmp/overture/places_seattle.parquet (15.8 MB)
-# → Import from this file? (y/n/download)
-```
-
-### Download Options
-
-**Options:**
-- `type` - Feature type within the theme (e.g., `place`, `building`, `land`)
-- `version` - Data version (e.g., `2025-01-17`). Defaults to latest available.
-- `output_dir` - Directory to save files. Defaults to `tmp/overture`.
-
-### List Available Data
-
-```bash
-# List available themes and their types
-rails overture_maps:download:themes
-
-# List available versions
-rails overture_maps:download:versions
-
-# List types available for a theme
-rails overture_maps:download:types[buildings]
-
-# List files without downloading
-rails overture_maps:download:list[places]
+# Discovery
+rails overture_maps:download:versions          # available Overture releases
+rails overture_maps:download:themes            # themes and their feature types
+rails overture_maps:download:types[buildings]  # types present in the current release
+rails overture_maps:download:list[places]      # files without downloading
+rails overture_maps:download:search_divisions[Seattle]
 ```
 
 ### Data Structure
@@ -294,166 +125,113 @@ Overture Maps data is organized by **theme** and **type**:
 | places | place |
 | transportation | connector, segment |
 
----
+The import tasks currently cover places, buildings, and addresses; all themes can be downloaded.
 
-## Advanced Usage
-
-### Programmatic Import
+## Configuration
 
 ```ruby
-# Import with custom transform
+# config/initializers/overture_maps.rb
+OvertureMaps.configure do |config|
+  config.release = "2026-06-17.0"   # pin a release (default: latest via STAC)
+  config.cache_dir = "tmp/overture" # where extracts are cached
+  config.batch_size = 1000          # import batch size
+  config.timeout = 30               # HTTP timeout in seconds
+  config.non_interactive = false    # never prompt (also OVERTURE_NON_INTERACTIVE=1)
+
+  # Point at a mirror (e.g. MinIO on your LAN) instead of Overture's bucket:
+  # config.s3_uri = "s3://my-mirror-bucket"
+  # config.s3_http_url = "https://my-mirror.example.com"
+end
+```
+
+## Programmatic Usage
+
+```ruby
+# Location-based import (what the rake tasks use)
+runner = OvertureMaps::Import::LocationBasedRunner.new(
+  theme: "places",
+  location: "Seattle",              # or "47.6_-122.4_47.7_-122.2", or a BoundingBox
+  model_class: OverturePlace,
+  categories: ["cafe"]
+).run
+runner.imported_count  # => 1234
+
+# File import with a custom transform (keyword or block)
 OvertureMaps::Import.run!(
   theme: "places",
   model_class: OverturePlace,
-  file_path: "/path/to/places.parquet",
-  batch_size: 1000
+  file_path: "/path/to/places.parquet"
 ) do |record|
-  # Transform record before import
-  {
-    id: record["id"],
-    names: record["names"],
-    categories: record["categories"],
-    geometry: parse_geometry(record["geometry"]),
-    country: record["country"],
-    created_at: Time.current,
-    updated_at: Time.current
-  }
+  { id: record["id"], name: record.dig("names", "primary"), ... }
 end
+
+# Division search
+OvertureMaps::Import::Downloader.search_divisions(query: "Seattle")
+# => [{ id:, name:, subtype:, country:, region:, bbox:, area_km2: }, ...]
+
+# Read a local parquet extract
+reader = OvertureMaps::Import::ParquetReader.new
+reader.each_record(source: "/path/to/file.parquet") { |record| ... }
 ```
-
-### Read Parquet Files Directly
-
-```ruby
-reader = OvertureMaps::Import::ParquetReader.new(theme: "places")
-
-reader.each_record(source: "/path/to/file.parquet") do |record|
-  puts record["id"]
-end
-```
-
----
 
 ## Model Usage
 
-### Querying Places
-
 ```ruby
-# All places
-OverturePlace.all
+# Spatial scopes (all models)
+OverturePlace.within_bounds(47.5, -122.4, 47.7, -122.2)  # south, west, north, east
+OverturePlace.near(47.6062, -122.3321, 1000)             # lat, lng, radius in meters
+OverturePlace.first.to_geojson
 
-# Within bounding box
-OverturePlace.within_bounds(40.7, -74.1, 40.9, -73.9)
-
-# Near a point (within 1km)
-OverturePlace.near(40.7128, -74.006, 1000)
-
-# By category
-OverturePlace.by_category("cafes")
-
-# By country
-OverturePlace.by_country("US")
-
-# By brand
+# Places
+OverturePlace.by_category("cafe")            # primary or alternate leaf category
 OverturePlace.by_brand("Starbucks")
+OverturePlace.by_country("US")
+OverturePlace.by_operating_status("open")
+OverturePlace.min_confidence(0.8)
 
-# Convert to GeoJSON
-place = OverturePlace.first
-place.to_geojson
-```
-
-### Querying Buildings
-
-```ruby
-# All buildings
-OvertureBuilding.all
-
-# By height range
+# Buildings
 OvertureBuilding.by_height(min: 50, max: 100)
-
-# By level range
-OvertureBuilding.by_level(min: 10)
-
-# Buildings with height data
+OvertureBuilding.by_floors(min: 10)
+OvertureBuilding.by_class("apartments")
 OvertureBuilding.with_height
-```
 
-### Querying Addresses
-
-```ruby
-# All addresses
-OvertureAddress.all
-
-# By country
+# Addresses
 OvertureAddress.by_country("US")
-
-# By locality
-OvertureAddress.by_locality("San Francisco")
-
-# By postcode
-OvertureAddress.by_postcode("94102")
+OvertureAddress.by_locality("Seattle")
+OvertureAddress.by_postcode("98101")
+OvertureAddress.first.full_address
 ```
 
 ## Database Utilities
 
-PostGIS helper methods:
-
 ```ruby
-# Check if PostGIS is available
 OvertureMaps::Database.postgis_available?
-
-# Create spatial index
 OvertureMaps::Database.create_spatial_index(:overture_places)
-
-# Bounding box query
-OvertureMaps::Database.bounding_box_query(
-  :overture_places,
-  south, west, north, east
-)
-
-# Nearest neighbors
-OvertureMaps::Database.nearest_neighbors(
-  :overture_places,
-  lat, lng,
-  limit: 10
-)
+OvertureMaps::Database.bounding_box_query(:overture_places, south, west, north, east)
+OvertureMaps::Database.nearest_neighbors(:overture_places, lat, lng)
 ```
 
-## Model Scopes
+## Attribution
 
-| Model | Scope | Description |
-|-------|-------|-------------|
-| `OverturePlace` | `within_bounds(s, w, n, e)` | Places within bounding box |
-| `OverturePlace` | `near(lat, lng, radius)` | Places near a point |
-| `OverturePlace` | `by_category(categories)` | Filter by category |
-| `OverturePlace` | `by_country(country)` | Filter by country |
-| `OverturePlace` | `by_brand(brand)` | Filter by brand |
-| `OvertureBuilding` | `by_height(min:, max:)` | Filter by height |
-| `OvertureBuilding` | `by_level(min:, max:)` | Filter by level |
-| `OvertureBuilding` | `with_height` | Only buildings with height |
-| `OvertureAddress` | `by_country(country)` | Filter by country |
-| `OvertureAddress` | `by_locality(locality)` | Filter by city |
-| `OvertureAddress` | `by_region(region)` | Filter by region |
-| `OvertureAddress` | `by_postcode(postcode)` | Filter by postcode |
+Overture data carries per-theme licenses (ODbL for OSM-derived themes, CDLA-Permissive-2.0 for places, per-source terms for addresses). The imported `sources` column preserves what you need for correct attribution; see [docs.overturemaps.org/attribution](https://docs.overturemaps.org/attribution/).
 
 ## Requirements
 
 - Ruby >= 3.0
 - Rails >= 7.0
-- PostgreSQL with PostGIS extension
-- RGeo (geospatial, included)
-- Parquet gem (for Parquet file support)
+- PostgreSQL with PostGIS
+- DuckDB (the `duckdb` gem, a `duckdb` binary on PATH, or automatic CLI download)
 
 ## Development
 
-Run tests:
-
 ```bash
+bundle install
 bundle exec rspec
 ```
 
 ## License
 
-MIT License - see LICENSE.txt
+MIT License — see LICENSE.txt
 
 ## Links
 

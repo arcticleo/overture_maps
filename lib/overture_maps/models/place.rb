@@ -5,29 +5,38 @@ module OvertureMaps
     class Place < Base
       self.table_name = "overture_places"
 
-      # Scope: by category
+      # Matches the primary category or any alternate. Takes leaf category
+      # names from the Overture taxonomy (e.g. "cafe", "restaurant").
       scope :by_category, ->(categories) {
-        where("categories ?| array[:categories]", categories: Array(categories))
+        cats = Array(categories).map(&:to_s)
+        where(
+          "primary_category = ANY (ARRAY[:cats]::text[]) OR categories->'alternate' ?| ARRAY[:cats]::text[]",
+          cats: cats
+        )
       }
 
-      # Scope: by country
       scope :by_country, ->(country) {
         where(country: country)
       }
 
-      # Scope: by brand
-      scope :by_brand, ->(brand) {
-        where("brands ?| array[:brands]", brands: Array(brand))
+      # Matches the brand's primary name, e.g. by_brand("Starbucks").
+      scope :by_brand, ->(brands) {
+        where(
+          "brands->'names'->>'primary' = ANY (ARRAY[:brands]::text[])",
+          brands: Array(brands).map(&:to_s)
+        )
       }
 
-      # Parse categories from JSON string or array
-      def categories
-        read_attribute(:categories).is_a?(String) ? JSON.parse(read_attribute(:categories)) : read_attribute(:categories)
-      end
+      scope :by_operating_status, ->(status) {
+        where(operating_status: status)
+      }
 
-      # Parse brands from JSON string or array
-      def brands
-        read_attribute(:brands).is_a?(String) ? JSON.parse(read_attribute(:brands)) : read_attribute(:brands)
+      scope :min_confidence, ->(confidence) {
+        where("confidence >= ?", confidence)
+      }
+
+      def brand_name
+        brands&.dig("names", "primary")
       end
     end
   end

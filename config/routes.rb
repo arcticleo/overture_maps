@@ -4,6 +4,7 @@ OvertureMaps::Engine.routes.draw do
   resources_constraint = { resource: /places|buildings|addresses|divisions|segments|connectors|base_features/ }
 
   get "search", to: "search#index"
+  get "attribution", to: "attribution#index"
   get "tiles/:layer/:z/:x/:y", to: "tiles#show",
                                constraints: { z: /\d+/, x: /\d+/, y: /\d+/ }
 

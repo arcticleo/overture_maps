@@ -10,16 +10,19 @@ module OvertureMaps
     # existing rows (keyed on the GERS id primary key) instead of failing.
     class Runner
       MAX_STORED_ERRORS = 50
+      PROGRESS_INTERVAL = 10_000
 
       attr_reader :model_class, :theme, :type, :batch_size, :imported_count, :error_count, :errors
 
-      def initialize(model_class:, theme: nil, type: nil, batch_size: nil, mapper: nil, release: nil)
+      def initialize(model_class:, theme: nil, type: nil, batch_size: nil, mapper: nil,
+                     release: nil, progress_every: PROGRESS_INTERVAL)
         @model_class = model_class
         @theme = theme
         @type = type
         @release = release
         @batch_size = batch_size || OvertureMaps.configuration.batch_size
         @mapper = mapper
+        @progress_every = progress_every
         @imported_count = 0
         @error_count = 0
         @errors = []
@@ -86,6 +89,7 @@ module OvertureMaps
 
         model_class.upsert_all(records, unique_by: model_class.primary_key)
         @imported_count += records.length
+        log_progress(records.length)
       rescue StandardError
         # Isolate bad rows without abandoning the batch.
         records.each do |record|
@@ -99,6 +103,16 @@ module OvertureMaps
       def record_error(message, record_id = nil)
         @error_count += 1
         @errors << { error: message, record_id: record_id } if @errors.length < MAX_STORED_ERRORS
+      end
+
+      # A line every @progress_every rows so long imports show life.
+      def log_progress(batch_length)
+        return unless @progress_every&.positive?
+        return unless (@imported_count / @progress_every) > ((@imported_count - batch_length) / @progress_every)
+
+        logger = OvertureMaps.configuration.logger
+        message = "  #{@imported_count} rows..."
+        logger ? logger.info(message) : puts(message)
       end
 
       # A geometry that fails to parse skips that record — it must never

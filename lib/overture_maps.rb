@@ -38,4 +38,5 @@ require "overture_maps/query"
 require "overture_maps/gers"
 require "overture_maps/changelog"
 require "overture_maps/syncer"
+require "overture_maps/attribution"
 require "overture_maps/engine" if defined?(Rails::Railtie)

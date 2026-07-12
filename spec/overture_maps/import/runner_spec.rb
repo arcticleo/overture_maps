@@ -78,6 +78,20 @@ RSpec.describe OvertureMaps::Import::Runner do
       expect(model.upserted.map { |r| r[:id] }).to eq(["2"])
     end
 
+    it "logs progress at the configured interval" do
+      logger = instance_double(Logger)
+      OvertureMaps.configure { |c| c.logger = logger }
+      model = fake_model
+      runner = described_class.new(model_class: model, theme: "places",
+                                   batch_size: 2, progress_every: 4)
+
+      expect(logger).to receive(:info).with("  4 rows...").once
+      expect(logger).to receive(:info).with("  8 rows...").once
+
+      records = (1..9).map { |i| { "id" => "r#{i}", "geometry" => "POINT (1 1)" } }
+      runner.import_from_records(records)
+    end
+
     it "caps stored errors but keeps counting" do
       model = fake_model
       runner = described_class.new(model_class: model, theme: "places")

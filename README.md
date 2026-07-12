@@ -1,6 +1,8 @@
 # Overture Maps Ruby Gem
 
-A Ruby gem for integrating with [Overture Maps](https://overturemaps.org/) — an open map data foundation providing geospatial data. Download bbox-filtered extracts of Overture GeoParquet data and import them into your Rails application's PostGIS database.
+A Ruby gem for integrating with [Overture Maps](https://overturemaps.org/) — an open map data foundation providing geospatial data. Download bbox-filtered extracts of Overture GeoParquet data, import them into your Rails application's PostGIS database, query them through ActiveRecord or a mountable REST API, and keep them current with changelog-driven syncs.
+
+This is an unofficial community gem, not a product of the Overture Maps Foundation.
 
 ## Features
 
@@ -347,7 +349,17 @@ OvertureMaps::Database.nearest_neighbors(:overture_places, lat, lng)
 
 ## Attribution
 
-Overture data carries per-theme licenses (ODbL for OSM-derived themes, CDLA-Permissive-2.0 for places, per-source terms for addresses). The imported `sources` column preserves what you need for correct attribution; see [docs.overturemaps.org/attribution](https://docs.overturemaps.org/attribution/).
+Overture data carries per-theme licenses (ODbL for OSM-derived themes, CDLA-Permissive-2.0 for places, per-source terms for addresses). The imported `sources` column preserves which upstream datasets contributed, and the gem turns that into the notices your app needs:
+
+```ruby
+OvertureMaps::Attribution.notices
+# => ["Overture Maps Foundation — overturemaps.org",
+#     "© OpenStreetMap contributors (ODbL)",
+#     "Data sources: Microsoft, meta"]
+OvertureMaps::Attribution.text   # one line for a map corner
+```
+
+Map UIs can fetch the same via `GET /overture/attribution`. See [docs.overturemaps.org/attribution](https://docs.overturemaps.org/attribution/) for the authoritative requirements.
 
 ## Requirements
 

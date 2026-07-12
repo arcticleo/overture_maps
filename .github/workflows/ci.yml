@@ -1,0 +1,54 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  spec:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        ruby: ["3.2", "3.3", "3.4"]
+
+    services:
+      postgis:
+        image: postgis/postgis:17-3.5
+        env:
+          POSTGRES_USER: overture_demo
+          POSTGRES_PASSWORD: overture_demo
+          POSTGRES_DB: overture_demo_development
+        ports:
+          - 5433:5432
+        options: >-
+          --health-cmd "pg_isready -U overture_demo"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # The duckdb gem builds against the DuckDB C library; the CLI covers
+      # the fallback path.
+      - name: Install DuckDB
+        run: |
+          DUCKDB_VERSION=1.5.3
+          curl -sL "https://github.com/duckdb/duckdb/releases/download/v${DUCKDB_VERSION}/libduckdb-linux-amd64.zip" -o /tmp/libduckdb.zip
+          sudo unzip -o /tmp/libduckdb.zip -d /tmp/libduckdb
+          sudo cp /tmp/libduckdb/libduckdb.so /usr/local/lib/
+          sudo cp /tmp/libduckdb/duckdb.h /tmp/libduckdb/duckdb.hpp /usr/local/include/
+          sudo ldconfig
+          curl -sL "https://github.com/duckdb/duckdb/releases/download/v${DUCKDB_VERSION}/duckdb_cli-linux-amd64.zip" -o /tmp/duckdb_cli.zip
+          sudo unzip -o /tmp/duckdb_cli.zip -d /usr/local/bin
+          duckdb --version
+
+      - uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: ${{ matrix.ruby }}
+          bundler-cache: true
+
+      - name: Run specs
+        run: bundle exec rspec

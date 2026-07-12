@@ -347,6 +347,31 @@ OvertureMaps::Database.bounding_box_query(:overture_places, south, west, north, 
 OvertureMaps::Database.nearest_neighbors(:overture_places, lat, lng)
 ```
 
+## MCP Server
+
+The gem ships `overture-maps-mcp`, a read-only [MCP](https://modelcontextprotocol.io)
+server over Overture's public data — no Rails app, no database. AI assistants
+get tools to geocode place names, query and count features, export GeoJSON,
+and look up GERS ids, all streaming from the bucket with bbox pushdown.
+
+```bash
+gem install overture_maps mcp
+```
+
+Claude Desktop config:
+
+```json
+{
+  "mcpServers": {
+    "overture-maps": { "command": "overture-maps-mcp" }
+  }
+}
+```
+
+Tools: `geocode`, `query_features`, `count_features`, `export_geojson`,
+`gers_lookup`, `list_releases`. The server is read-only and never touches
+your application database.
+
 ## Attribution
 
 Overture data carries per-theme licenses (ODbL for OSM-derived themes, CDLA-Permissive-2.0 for places, per-source terms for addresses). The imported `sources` column preserves which upstream datasets contributed, and the gem turns that into the notices your app needs:

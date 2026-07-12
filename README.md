@@ -1,16 +1,22 @@
 # Overture Maps Ruby Gem
 
-A Ruby gem for integrating with [Overture Maps](https://overturemaps.org/) — an open map data foundation providing geospatial data. Download bbox-filtered extracts of Overture GeoParquet data, import them into your Rails application's PostGIS database, query them through ActiveRecord or a mountable REST API, and keep them current with changelog-driven syncs.
+A Ruby gem for integrating with [Overture Maps](https://overturemaps.org/) — an open map data foundation providing geospatial data. Download bbox-filtered extracts of Overture GeoParquet data, import them into your Rails application's PostGIS database, serve them through ActiveRecord, a mountable REST API, or vector tiles, and keep them current with changelog-driven syncs. Or skip the database entirely: query the bucket ad hoc from Ruby, or hand AI assistants the bundled MCP server.
 
 This is an unofficial community gem, not a product of the Overture Maps Foundation.
 
 ## Features
 
 - **Location-based import**: `rails overture_maps:import:places[Seattle]` — searches Overture divisions by name, downloads a bbox-filtered extract, and upserts it into PostGIS
+- **All six Overture themes**: places, buildings, addresses, divisions, transportation, and base, with category filters backed by the full ~2,100-entry Overture taxonomy
 - **Efficient remote access**: DuckDB pushes bbox predicates down to parquet row-group statistics, so only the relevant slice of Overture's multi-hundred-GB datasets is transferred
 - **Idempotent imports**: rows are upserted by GERS id; re-running an import updates rather than fails
 - **Release-aware**: discovers the latest monthly Overture release via the official STAC catalog; extracts are cached per release and area
-- **Rails integration**: model generators, rake tasks, PostGIS utilities, RGeo geometries
+- **Changelog-driven sync**: `rails overture_maps:sync` brings imported areas to the latest release by applying the official GERS changelog — no full reloads
+- **REST API**: a mountable engine serves imported data as JSON, GeoJSON, and Mapbox Vector Tiles, so MapLibre renders straight from your Rails app with no separate tile server
+- **Ad-hoc querying**: `OvertureMaps.query` counts, streams, and exports Overture data straight from the bucket — no import, no database
+- **MCP server**: `overture-maps-mcp` gives AI assistants read-only geocoding, query, and GeoJSON export tools over Overture's public data
+- **Rails integration**: model generators, spatial scopes, rake tasks, PostGIS utilities, RGeo geometries
+- **Attribution helpers**: builds the ODbL/CDLA notices your map is required to display from the imported source metadata
 
 ## Installation
 

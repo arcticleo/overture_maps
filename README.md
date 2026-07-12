@@ -138,6 +138,52 @@ Overture Maps data is organized by **theme** and **type**:
 
 All six themes can be imported and downloaded. Imports cover the types shown above except `building_part` (planned; needs the parent-building relationship). Division imports use `division_area` — the geocodable territories.
 
+## REST API
+
+The gem ships a mountable engine serving imported data as JSON, GeoJSON,
+and Mapbox Vector Tiles (the install generator adds the mount line):
+
+```ruby
+# config/routes.rb
+mount OvertureMaps::Engine => "/overture"
+```
+
+```
+GET /overture/places?bbox=-122.35,47.60,-122.33,47.62      # west,south,east,north
+GET /overture/places?near=47.609,-122.34,500&category=cafe
+GET /overture/buildings?q=tower&format=geojson             # FeatureCollection
+GET /overture/places/<gers-id>
+GET /overture/search?q=Seattle                             # division geocoding
+GET /overture/tiles/places/14/2624/5721.mvt                # vector tiles via ST_AsMVT
+```
+
+Resources: `places`, `buildings`, `addresses`, `divisions`, `segments`,
+`connectors`, `base_features`. Collections paginate by keyset — pass
+`meta.next_cursor` back as `?after=`. Limits are capped
+(`config.api_max_limit`), tile responses carry public cache headers, and
+everything is read-only.
+
+MapLibre can render imported data with no separate tile server:
+
+```js
+map.addSource("places", {
+  type: "vector",
+  tiles: ["https://your-app.example/overture/tiles/places/{z}/{x}/{y}.mvt"]
+});
+```
+
+The API is open by default; wrap it in your own auth:
+
+```ruby
+OvertureMaps.configure do |config|
+  config.api_auth = ->(controller) {
+    controller.head :unauthorized unless controller.request.headers["X-Api-Key"] == Rails.application.credentials.overture_api_key
+  }
+end
+```
+
+For public deployments, add rate limiting (e.g. Rack::Attack) in the host app.
+
 ## Keeping Data Current
 
 Overture publishes a new release monthly. Every import records its area and

@@ -15,8 +15,13 @@ module OvertureMaps
     # non_interactive: never prompt; pick the best division match and prefer fresh downloads.
     # duckdb_cli_path: explicit path to the duckdb binary (otherwise PATH, then auto-download).
     # logger: receives progress output; defaults to stdout logging from the rake layer.
+    # api_auth: callable invoked with the controller before every API
+    #   request; render/head inside it to reject (nil = open access).
+    # api_default_limit / api_max_limit: collection endpoint page sizing.
+    # tile_feature_limit: per-tile feature cap for the MVT endpoint.
     attr_accessor :release, :cache_dir, :s3_http_url, :s3_uri, :s3_region,
-                  :batch_size, :timeout, :non_interactive, :duckdb_cli_path, :logger
+                  :batch_size, :timeout, :non_interactive, :duckdb_cli_path, :logger,
+                  :api_auth, :api_default_limit, :api_max_limit, :tile_feature_limit
 
     def initialize
       @release = nil
@@ -29,6 +34,10 @@ module OvertureMaps
       @non_interactive = !ENV["OVERTURE_NON_INTERACTIVE"].to_s.empty?
       @duckdb_cli_path = ENV["OVERTURE_DUCKDB_CLI"]
       @logger = nil
+      @api_auth = nil
+      @api_default_limit = 100
+      @api_max_limit = 1000
+      @tile_feature_limit = 20_000
     end
   end
 end

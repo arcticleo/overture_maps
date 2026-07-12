@@ -9,7 +9,8 @@ RSpec.describe OvertureMaps::DivisionSearch do
 
   describe ".search" do
     it "falls back to the bucket when the local table is unavailable" do
-      # No database connection in specs, so table_exists? raises → remote.
+      allow(OvertureMaps::Models::Division).to receive(:table_exists?)
+        .and_raise(ActiveRecord::ConnectionNotEstablished)
       expect(OvertureMaps::Import::Downloader)
         .to receive(:search_divisions).with(query: "Seattle", release: nil, limit: 20)
         .and_return(remote_results)

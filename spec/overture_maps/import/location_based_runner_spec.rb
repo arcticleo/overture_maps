@@ -32,7 +32,7 @@ RSpec.describe OvertureMaps::Import::LocationBasedRunner do
 
     it "searches divisions for names and picks the first without a callback" do
       bbox = OvertureMaps::BoundingBox.new(lat1: 47, lng1: -123, lat2: 48, lng2: -122)
-      allow(OvertureMaps::Import::Downloader).to receive(:search_divisions).and_return(
+      allow(OvertureMaps::DivisionSearch).to receive(:search).and_return(
         [{ name: "Seattle", subtype: "locality", country: "US", region: "US-WA", bbox: bbox }]
       )
 

@@ -14,7 +14,7 @@ Gem::Specification.new do |spec|
 
   spec.required_ruby_version = ">= 3.0"
 
-  spec.files = Dir["lib/**/*", "README.md", "LICENSE.txt"]
+  spec.files = Dir["lib/**/*", "app/**/*", "config/routes.rb", "README.md", "LICENSE.txt"]
   spec.require_paths = ["lib"]
 
   spec.add_dependency "activerecord", ">= 7.0"
@@ -33,4 +33,5 @@ Gem::Specification.new do |spec|
   spec.add_development_dependency "rspec", "~> 3.12"
   spec.add_development_dependency "webmock", "~> 3.18"
   spec.add_development_dependency "rake", ">= 13.0"
+  spec.add_development_dependency "rack-test", ">= 2.0"
 end

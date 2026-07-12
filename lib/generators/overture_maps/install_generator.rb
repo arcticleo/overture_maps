@@ -29,6 +29,14 @@ module OvertureMaps
         template "connector_model.rb.tt", "app/models/overture_connector.rb"
         template "base_feature_model.rb.tt", "app/models/overture_base_feature.rb"
       end
+
+      def add_engine_route
+        route <<~ROUTE.strip
+          # Overture Maps read-only API (JSON/GeoJSON + MVT tiles).
+          # Guard with config.api_auth in an initializer if the app is public.
+          mount OvertureMaps::Engine => "/overture"
+        ROUTE
+      end
     end
   end
 end

@@ -6,10 +6,19 @@ module OvertureMaps
   # Interactive glue for the rake tasks. Prompts and process exits live here
   # and only here — the library classes raise or take callbacks instead.
   module RakeUI
-    IMPORT_MODELS = {
-      "places" => "OverturePlace",
-      "buildings" => "OvertureBuilding",
-      "addresses" => "OvertureAddress"
+    # Which feature types are imported per theme, and into which model.
+    # building_part is skipped for now (needs a building_id relationship).
+    IMPORT_THEMES = {
+      "places" => { "place" => "OverturePlace" },
+      "buildings" => { "building" => "OvertureBuilding" },
+      "addresses" => { "address" => "OvertureAddress" },
+      "divisions" => { "division_area" => "OvertureDivision" },
+      "transportation" => {
+        "segment" => "OvertureSegment",
+        "connector" => "OvertureConnector"
+      },
+      "base" => OvertureMaps::Import::Downloader::TYPES["base"]
+              .to_h { |t| [t, "OvertureBaseFeature"] }
     }.freeze
 
     module_function
@@ -23,15 +32,19 @@ module OvertureMaps
       exit 1
     end
 
-    def require_model!(theme)
-      name = IMPORT_MODELS[theme] or abort!("No import model for theme #{theme}")
-      model = name.constantize
-      unless model.table_exists?
-        abort!("#{name} table does not exist. Run: rails db:migrate")
+    # Resolves { type => model_name } to { type => model_class }, verifying
+    # tables exist.
+    def require_models!(theme)
+      mapping = IMPORT_THEMES[theme] or abort!("No import models for theme #{theme}")
+      mapping.to_h do |type, name|
+        model = begin
+          name.constantize
+        rescue NameError
+          abort!("#{name} model not found. Run: rails generate overture_maps:install")
+        end
+        abort!("#{name} table does not exist. Run: rails db:migrate") unless model.table_exists?
+        [type, model]
       end
-      model
-    rescue NameError
-      abort!("#{name} model not found. Run: rails generate overture_maps:install")
     end
 
     def select_division_callback
@@ -83,7 +96,7 @@ module OvertureMaps
       bbox = OvertureMaps::BoundingBox.parse(location)
       return bbox if bbox
 
-      results = OvertureMaps::Import::Downloader.search_divisions(query: location, release: release)
+      results = OvertureMaps::DivisionSearch.search(query: location, release: release)
       abort!("No divisions found matching '#{location}'") if results.empty?
 
       division = results.length == 1 || !interactive? ? results.first : prompt_division(results)
@@ -114,7 +127,7 @@ end
 
 namespace :overture_maps do
   namespace :import do
-    OvertureMaps::RakeUI::IMPORT_MODELS.each_key do |theme|
+    OvertureMaps::RakeUI::IMPORT_THEMES.each_key do |theme|
       desc "Import #{theme} by location name or bounding box, e.g. rails overture_maps:import:#{theme}[Seattle]"
       task theme.to_sym, [:location, :categories] => :environment do |_t, args|
         location = args[:location]
@@ -122,18 +135,18 @@ namespace :overture_maps do
           puts "Usage:"
           puts "  rails overture_maps:import:#{theme}[Seattle]"
           puts "  rails \"overture_maps:import:#{theme}[47.606_-122.336_47.609_-122.333]\""
-          puts "  rails overture_maps:import:#{theme}[Seattle,\"cafe,restaurant\"]  # leaf categories" if theme == "places"
+          puts "  rails overture_maps:import:#{theme}[Seattle,\"cafe,restaurant\"]  # categories or groups" if theme == "places"
           exit 1
         end
 
         categories = args[:categories]&.split(",")&.map(&:strip)
-        model = OvertureMaps::RakeUI.require_model!(theme)
+        models = OvertureMaps::RakeUI.require_models!(theme)
 
         begin
           runner = OvertureMaps::Import::LocationBasedRunner.new(
             theme: theme,
             location: location,
-            model_class: model,
+            models: models,
             categories: categories,
             release: OvertureMaps::RakeUI.release_arg,
             select_division: OvertureMaps::RakeUI.select_division_callback,
@@ -155,7 +168,7 @@ namespace :overture_maps do
       end
     end
 
-    desc "Import all supported themes for a location"
+    desc "Import all themes for a location"
     task :all, [:location] => :environment do |_t, args|
       location = args[:location] or OvertureMaps::RakeUI.abort!(
         "Usage: rails overture_maps:import:all[Seattle]"
@@ -166,14 +179,14 @@ namespace :overture_maps do
       bbox = OvertureMaps::RakeUI.resolve_bbox(location, release: OvertureMaps::RakeUI.release_arg)
 
       failures = 0
-      OvertureMaps::RakeUI::IMPORT_MODELS.each_key do |theme|
+      OvertureMaps::RakeUI::IMPORT_THEMES.each_key do |theme|
         puts "=" * 60
         puts "Importing #{theme}..."
         puts "=" * 60
 
-        model = OvertureMaps::RakeUI.require_model!(theme)
+        models = OvertureMaps::RakeUI.require_models!(theme)
         runner = OvertureMaps::Import::LocationBasedRunner.new(
-          theme: theme, location: bbox, model_class: model,
+          theme: theme, location: bbox, models: models,
           release: OvertureMaps::RakeUI.release_arg,
           confirm_cached: OvertureMaps::RakeUI.confirm_cached_callback
         ).run
@@ -192,7 +205,7 @@ namespace :overture_maps do
         "Usage: rails overture_maps:import:search[Seattle]"
       )
 
-      results = OvertureMaps::Import::Downloader.search_divisions(
+      results = OvertureMaps::DivisionSearch.search(
         query: query, release: OvertureMaps::RakeUI.release_arg
       )
       if results.empty?
@@ -209,13 +222,13 @@ namespace :overture_maps do
 
     desc "Show import statistics"
     task stats: :environment do
-      OvertureMaps::RakeUI::IMPORT_MODELS.each do |theme, model_name|
+      OvertureMaps::RakeUI::IMPORT_THEMES.values.flat_map(&:values).uniq.each do |model_name|
         count = begin
           model_name.constantize.count
         rescue StandardError
           "N/A (run rails generate overture_maps:install && rails db:migrate)"
         end
-        puts format("  %-12s %s", "#{theme.capitalize}:", count)
+        puts format("  %-24s %s", "#{model_name}:", count)
       end
     end
   end
@@ -387,7 +400,8 @@ namespace :overture_maps do
         category = OvertureCategory.find_or_initialize_by(name: name)
         category.update!(
           primary_category: taxonomy.first,
-          hierarchy_level: taxonomy.size - 1
+          hierarchy_level: taxonomy.size - 1,
+          taxonomy: taxonomy
         )
         count += 1
       end

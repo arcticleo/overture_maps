@@ -31,5 +31,6 @@ require "overture_maps/releases"
 require "overture_maps/query_engine"
 require "overture_maps/database"
 require "overture_maps/models"
+require "overture_maps/division_search"
 require "overture_maps/import"
 require "overture_maps/railtie" if defined?(Rails::Railtie)

@@ -1,0 +1,27 @@
+class CreateOvertureBaseFeatures < ActiveRecord::Migration<%= migration_version %>
+  def change
+    create_table :overture_base_features, id: :string do |t|
+      t.string :feature_type, null: false
+      t.string :name
+      t.jsonb :names, default: {}
+      t.string :subtype
+      t.string :feature_class
+      t.string :surface
+      t.float :elevation
+      t.integer :level
+      t.string :wikidata
+      t.jsonb :source_tags, default: {}
+      t.jsonb :sources, default: []
+      t.string :overture_release
+      t.timestamps
+    end
+
+    # Base features span points, linestrings, and polygons.
+    add_column :overture_base_features, :geometry, :geometry, geographic: true, srid: 4326
+    add_index :overture_base_features, :geometry, using: :gist
+
+    add_index :overture_base_features, :feature_type
+    add_index :overture_base_features, :subtype
+    add_index :overture_base_features, :feature_class
+  end
+end

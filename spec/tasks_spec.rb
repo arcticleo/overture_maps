@@ -19,6 +19,9 @@ RSpec.describe "rake tasks" do
       overture_maps:import:places
       overture_maps:import:buildings
       overture_maps:import:addresses
+      overture_maps:import:divisions
+      overture_maps:import:transportation
+      overture_maps:import:base
       overture_maps:import:all
       overture_maps:import:search
       overture_maps:import:stats

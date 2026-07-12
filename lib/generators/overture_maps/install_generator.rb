@@ -13,6 +13,9 @@ module OvertureMaps
         migration_template "place_migration.rb.tt", "db/migrate/create_overture_places.rb"
         migration_template "building_migration.rb.tt", "db/migrate/create_overture_buildings.rb"
         migration_template "address_migration.rb.tt", "db/migrate/create_overture_addresses.rb"
+        migration_template "division_migration.rb.tt", "db/migrate/create_overture_divisions.rb"
+        migration_template "transportation_migration.rb.tt", "db/migrate/create_overture_transportation.rb"
+        migration_template "base_features_migration.rb.tt", "db/migrate/create_overture_base_features.rb"
       end
 
       def create_models
@@ -20,6 +23,10 @@ module OvertureMaps
         template "place_model.rb.tt", "app/models/overture_place.rb"
         template "building_model.rb.tt", "app/models/overture_building.rb"
         template "address_model.rb.tt", "app/models/overture_address.rb"
+        template "division_model.rb.tt", "app/models/overture_division.rb"
+        template "segment_model.rb.tt", "app/models/overture_segment.rb"
+        template "connector_model.rb.tt", "app/models/overture_connector.rb"
+        template "base_feature_model.rb.tt", "app/models/overture_base_feature.rb"
       end
     end
   end

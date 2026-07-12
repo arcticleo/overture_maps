@@ -5,7 +5,11 @@ module OvertureMaps
     # Orchestrates a location-based import: resolves the location (bbox
     # string or division name) to a bounding box, downloads or reuses a
     # bbox-filtered parquet extract per feature type, and streams it into the
-    # model via Runner.
+    # target model via Runner.
+    #
+    # Themes map one or more feature types to models:
+    #   models: { "segment" => OvertureSegment, "connector" => OvertureConnector }
+    # For single-model themes, model_class: alone is enough.
     #
     # This class never prompts or exits. Interactive behavior is injected by
     # the rake layer through callbacks:
@@ -14,15 +18,14 @@ module OvertureMaps
     # Without callbacks (library/job usage) it picks the largest matching
     # division and reuses exact cache hits.
     class LocationBasedRunner
-      attr_reader :theme, :location, :model_class, :imported_count, :error_count, :errors, :bbox
+      attr_reader :theme, :location, :imported_count, :error_count, :errors, :bbox
 
-      def initialize(theme:, location:, model_class:, type: nil, categories: nil,
+      def initialize(theme:, location:, model_class: nil, models: nil, categories: nil,
                      batch_size: nil, release: nil, output_dir: nil,
                      select_division: nil, confirm_cached: nil)
         @theme = theme
         @location = location
-        @model_class = model_class
-        @type = type
+        @models = resolve_models(model_class, models)
         @categories = categories
         @batch_size = batch_size
         @release = Releases.validate!(release || Releases.current)
@@ -38,7 +41,7 @@ module OvertureMaps
         @bbox = resolve_bbox
         log "Bounding box: #{bbox} (release #{@release})"
 
-        types_to_import.each { |t| import_type(t) }
+        @models.each { |type, model_class| import_type(type, model_class) }
         self
       end
 
@@ -48,12 +51,14 @@ module OvertureMaps
 
       private
 
-      def types_to_import
-        return [@type] if @type
+      def resolve_models(model_class, models)
+        return models if models&.any?
+        raise ArgumentError, "provide model_class: or models:" unless model_class
 
-        Downloader.types_for_theme(theme).tap do |types|
-          raise Error, "no types for theme: #{theme}" if types.empty?
-        end
+        types = Downloader.types_for_theme(theme)
+        raise Error, "no types for theme: #{theme}" if types.empty?
+
+        types.to_h { |t| [t, model_class] }
       end
 
       def resolve_bbox
@@ -62,7 +67,7 @@ module OvertureMaps
         parsed = BoundingBox.parse(location)
         return parsed if parsed
 
-        results = Downloader.search_divisions(query: location, release: @release)
+        results = DivisionSearch.search(query: location, release: @release)
         raise Error, "no divisions found matching #{location.inspect}" if results.empty?
 
         division = choose_division(results)
@@ -78,7 +83,7 @@ module OvertureMaps
         @select_division.call(results)
       end
 
-      def import_type(type)
+      def import_type(type, model_class)
         downloader = Downloader.new(theme: theme, type: type, release: @release, output_dir: @output_dir)
         path = resolve_extract(downloader)
         unless path
@@ -86,7 +91,7 @@ module OvertureMaps
           return
         end
 
-        runner = Runner.new(model_class: model_class, theme: theme,
+        runner = Runner.new(model_class: model_class, theme: theme, type: type,
                             batch_size: @batch_size, release: @release)
         reader = ParquetReader.new(theme: theme)
         log "#{theme}/#{type}: importing #{File.basename(path)}..."
@@ -123,20 +128,26 @@ module OvertureMaps
       end
 
       # Matches leaf categories against categories.primary and
-      # categories.alternate. (Expanding taxonomy groups like eat_and_drink
-      # into their leaves requires the imported taxonomy table — Phase 2.)
+      # categories.alternate. Taxonomy groups (e.g. "eat_and_drink",
+      # "restaurant") expand to their leaves when the categories table has
+      # been populated (rails overture_maps:categories:populate).
       def category_filter
         return nil unless @categories&.any?
 
-        wanted = @categories.map(&:to_s)
+        wanted = expand_categories(@categories.map(&:to_s))
         lambda do |record|
           cats = record["categories"]
-          next false unless cats.is_a?(Hash)
+          primary = cats.is_a?(Hash) ? cats["primary"] : record["basic_category"]
+          alternates = cats.is_a?(Hash) ? Array(cats["alternate"]) : []
 
-          wanted.any? do |w|
-            cats["primary"] == w || Array(cats["alternate"]).include?(w)
-          end
+          wanted.any? { |w| primary == w || alternates.include?(w) }
         end
+      end
+
+      def expand_categories(names)
+        Models::Category.expand(names)
+      rescue StandardError
+        names
       end
 
       def log(message)

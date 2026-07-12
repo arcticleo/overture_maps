@@ -1,0 +1,31 @@
+class CreateOvertureDivisions < ActiveRecord::Migration<%= migration_version %>
+  def change
+    create_table :overture_divisions, id: :string do |t|
+      t.string :division_id
+      t.string :name
+      t.jsonb :names, default: {}
+      t.string :subtype
+      t.string :division_class
+      t.string :country
+      t.string :region
+      t.boolean :is_land
+      t.boolean :is_territorial
+      t.float :bbox_xmin
+      t.float :bbox_xmax
+      t.float :bbox_ymin
+      t.float :bbox_ymax
+      t.jsonb :sources, default: []
+      t.string :overture_release
+      t.timestamps
+    end
+
+    # Division areas are polygons/multipolygons.
+    add_column :overture_divisions, :geometry, :geometry, geographic: true, srid: 4326
+    add_index :overture_divisions, :geometry, using: :gist
+
+    add_index :overture_divisions, :name
+    add_index :overture_divisions, :subtype
+    add_index :overture_divisions, :country
+    add_index :overture_divisions, :division_id
+  end
+end

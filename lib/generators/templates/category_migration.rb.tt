@@ -4,6 +4,7 @@ class CreateOvertureCategories < ActiveRecord::Migration<%= migration_version %>
       t.string :name, null: false
       t.string :primary_category
       t.integer :hierarchy_level, default: 0
+      t.jsonb :taxonomy, default: []
 
       t.timestamps
     end

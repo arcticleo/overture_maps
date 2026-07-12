@@ -69,6 +69,40 @@ RSpec.describe OvertureMaps::Import::LocationBasedRunner do
     end
   end
 
+  describe "multi-model themes" do
+    it "imports each type into its own model" do
+      segments = fake_model
+      connectors = fake_model
+      runner = described_class.new(
+        theme: "transportation", location: "0,0,1,1",
+        models: { "segment" => segments, "connector" => connectors }
+      )
+
+      imported = []
+      allow(runner).to receive(:import_type) { |type, model| imported << [type, model] }
+      runner.run
+
+      expect(imported).to eq([["segment", segments], ["connector", connectors]])
+    end
+
+    it "expands a single model_class across the theme's types" do
+      model = fake_model
+      runner = described_class.new(theme: "base", location: "0,0,1,1", model_class: model)
+
+      imported = []
+      allow(runner).to receive(:import_type) { |type, m| imported << type }
+      runner.run
+
+      expect(imported).to match_array(%w[bathymetry infrastructure land land_cover land_use water])
+    end
+
+    it "requires either model_class or models" do
+      expect {
+        described_class.new(theme: "places", location: "0,0,1,1")
+      }.to raise_error(ArgumentError, /model_class/)
+    end
+  end
+
   describe "category filtering" do
     it "matches primary and alternate leaf categories" do
       runner = described_class.new(
@@ -80,6 +114,41 @@ RSpec.describe OvertureMaps::Import::LocationBasedRunner do
       expect(filter.call("categories" => { "primary" => "bar", "alternate" => ["cafe"] })).to be(true)
       expect(filter.call("categories" => { "primary" => "bar" })).to be(false)
       expect(filter.call("categories" => nil)).to be(false)
+    end
+
+    it "matches the post-deprecation basic_category field" do
+      runner = described_class.new(
+        theme: "places", location: "0,0,1,1", model_class: fake_model, categories: ["cafe"]
+      )
+      filter = runner.send(:category_filter)
+
+      expect(filter.call("basic_category" => "cafe")).to be(true)
+      expect(filter.call("basic_category" => "bar")).to be(false)
+    end
+
+    it "expands taxonomy groups through the categories table when available" do
+      allow(OvertureMaps::Models::Category).to receive(:expand)
+        .with(["eat_and_drink"]).and_return(%w[eat_and_drink cafe restaurant])
+
+      runner = described_class.new(
+        theme: "places", location: "0,0,1,1", model_class: fake_model,
+        categories: ["eat_and_drink"]
+      )
+      filter = runner.send(:category_filter)
+
+      expect(filter.call("categories" => { "primary" => "cafe" })).to be(true)
+      expect(filter.call("categories" => { "primary" => "museum" })).to be(false)
+    end
+
+    it "passes categories through unchanged when the table is unavailable" do
+      allow(OvertureMaps::Models::Category).to receive(:expand).and_raise(StandardError)
+
+      runner = described_class.new(
+        theme: "places", location: "0,0,1,1", model_class: fake_model, categories: ["cafe"]
+      )
+      filter = runner.send(:category_filter)
+
+      expect(filter.call("categories" => { "primary" => "cafe" })).to be(true)
     end
   end
 end

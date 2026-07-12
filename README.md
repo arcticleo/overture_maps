@@ -38,7 +38,7 @@ rails generate overture_maps:install
 rails db:migrate
 ```
 
-This creates migrations for the PostGIS extension and the `overture_places`, `overture_buildings`, `overture_addresses`, and `overture_categories` tables, plus their model files. Individual generators also exist: `overture_maps:place`, `overture_maps:building`, `overture_maps:address`.
+This creates migrations for the PostGIS extension and the `overture_places`, `overture_buildings`, `overture_addresses`, `overture_categories`, `overture_divisions`, `overture_segments`/`overture_connectors`, and `overture_base_features` tables, plus their model files. Individual generators also exist: `overture_maps:place`, `overture_maps:building`, `overture_maps:address`, `overture_maps:division`, `overture_maps:transportation`, `overture_maps:base_features`.
 
 ### Fetch Categories (Recommended)
 
@@ -62,13 +62,24 @@ rails overture_maps:import:places[47.606_-122.336_47.609_-122.333]
 rails "overture_maps:import:places[Seattle,cafe]"
 rails "overture_maps:import:places[Seattle,cafe restaurant]"
 
+# Filter by taxonomy group (expands to leaf categories once
+# overture_maps:categories:populate has run)
+rails "overture_maps:import:places[Seattle,eat_and_drink]"
+
 # Other themes
 rails overture_maps:import:buildings[Seattle]
 rails overture_maps:import:addresses[Seattle]
+rails overture_maps:import:divisions[Washington]
+rails overture_maps:import:transportation[Seattle]
+rails overture_maps:import:base[Seattle]
 
 # Everything (resolves the location once, then imports each theme)
 rails overture_maps:import:all[Seattle]
 ```
+
+Importing divisions has a bonus: once `overture_divisions` is populated,
+location-name searches resolve against your local database instead of
+querying Overture's bucket — imports and searches get much faster.
 
 How it works:
 
@@ -125,7 +136,7 @@ Overture Maps data is organized by **theme** and **type**:
 | places | place |
 | transportation | connector, segment |
 
-The import tasks currently cover places, buildings, and addresses; all themes can be downloaded.
+All six themes can be imported and downloaded. Imports cover the types shown above except `building_part` (planned; needs the parent-building relationship). Division imports use `division_area` — the geocodable territories.
 
 ## Configuration
 
@@ -200,6 +211,20 @@ OvertureAddress.by_country("US")
 OvertureAddress.by_locality("Seattle")
 OvertureAddress.by_postcode("98101")
 OvertureAddress.first.full_address
+
+# Divisions
+OvertureDivision.by_subtype("locality")
+OvertureDivision.search_by_name("Seattle").largest_first
+OvertureDivision.first.to_bounding_box
+
+# Transportation
+OvertureSegment.roads.by_class("motorway")
+OvertureSegment.rails
+OvertureConnector.near(47.6062, -122.3321, 500)
+
+# Base features
+OvertureBaseFeature.water
+OvertureBaseFeature.land_use.by_class("park")
 ```
 
 ## Database Utilities

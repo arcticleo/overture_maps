@@ -84,12 +84,19 @@ module OvertureMaps
       region = OvertureMaps.configuration.s3_region
       raise Error, "invalid s3_region: #{region.inspect}" unless region.match?(/\A[a-z0-9-]+\z/)
 
+      # Division areas and building footprints have large row groups; the
+      # httpfs default of 30s times out on slower links, so give bulk
+      # fetches at least two minutes and a few retries.
+      http_timeout_ms = [Integer(OvertureMaps.configuration.timeout) * 1000, 120_000].max
+
       [
         "INSTALL spatial",
         "LOAD spatial",
         "INSTALL httpfs",
         "LOAD httpfs",
-        "SET s3_region='#{region}'"
+        "SET s3_region='#{region}'",
+        "SET http_timeout=#{http_timeout_ms}",
+        "SET http_retries=5"
       ]
     end
 

@@ -1,0 +1,38 @@
+class CreateOvertureTransportation < ActiveRecord::Migration<%= migration_version %>
+  def change
+    create_table :overture_segments, id: :string do |t|
+      t.string :name
+      t.jsonb :names, default: {}
+      t.string :subtype
+      t.string :segment_class
+      t.string :subclass
+      t.jsonb :connectors, default: []
+      t.jsonb :routes, default: []
+      t.jsonb :speed_limits, default: []
+      t.jsonb :access_restrictions, default: []
+      t.jsonb :prohibited_transitions, default: []
+      t.jsonb :road_surface, default: []
+      t.jsonb :road_flags, default: []
+      t.jsonb :destinations, default: []
+      t.jsonb :sources, default: []
+      t.string :overture_release
+      t.timestamps
+    end
+
+    # Segments are linestrings.
+    add_column :overture_segments, :geometry, :geometry, geographic: true, srid: 4326
+    add_index :overture_segments, :geometry, using: :gist
+
+    add_index :overture_segments, :subtype
+    add_index :overture_segments, :segment_class
+
+    create_table :overture_connectors, id: :string do |t|
+      t.jsonb :sources, default: []
+      t.string :overture_release
+      t.timestamps
+    end
+
+    add_column :overture_connectors, :geometry, :st_point, geographic: true, srid: 4326
+    add_index :overture_connectors, :geometry, using: :gist
+  end
+end

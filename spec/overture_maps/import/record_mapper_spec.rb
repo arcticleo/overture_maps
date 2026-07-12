@@ -55,6 +55,19 @@ RSpec.describe OvertureMaps::Import::RecordMapper do
 
       expect(attrs).not_to have_key(:websites)
     end
+
+    it "reads the post-deprecation basic_category/taxonomy shape" do
+      attrs = mapper.call(
+        "id" => "y", "geometry" => "POINT (0 0)",
+        "basic_category" => "coffee_shop",
+        "taxonomy" => { "primary" => "coffee_shop", "hierarchy" => %w[eat_and_drink cafe coffee_shop] }
+      )
+
+      expect(attrs[:primary_category]).to eq("coffee_shop")
+      expect(attrs[:categories]).to eq(
+        { "primary" => "coffee_shop", "hierarchy" => %w[eat_and_drink cafe coffee_shop] }
+      )
+    end
   end
 
   describe "buildings mapping" do
@@ -75,6 +88,85 @@ RSpec.describe OvertureMaps::Import::RecordMapper do
       expect(attrs[:height]).to eq(21.5)
       expect(attrs[:num_floors]).to eq(6)
       expect(attrs).not_to have_key(:class)
+    end
+  end
+
+  describe "divisions mapping (division_area)" do
+    let(:model) do
+      fake_model(%w[id geometry name names division_id subtype division_class country region
+                    is_land is_territorial bbox_xmin bbox_xmax bbox_ymin bbox_ymax
+                    sources overture_release created_at updated_at])
+    end
+    let(:mapper) { described_class.for(theme: "divisions", type: "division_area", model_class: model) }
+
+    it "flattens the bbox struct into columns" do
+      attrs = mapper.call(
+        "id" => "area-1", "division_id" => "div-1",
+        "names" => { "primary" => "Seattle" }, "subtype" => "locality", "class" => "land",
+        "country" => "US", "region" => "US-WA", "is_land" => true,
+        "bbox" => { "xmin" => -122.4, "xmax" => -122.2, "ymin" => 47.5, "ymax" => 47.7 }
+      )
+
+      expect(attrs[:division_id]).to eq("div-1")
+      expect(attrs[:division_class]).to eq("land")
+      expect(attrs[:bbox_xmin]).to eq(-122.4)
+      expect(attrs[:bbox_ymax]).to eq(47.7)
+    end
+
+    it "handles missing bbox structs" do
+      attrs = mapper.call("id" => "area-2")
+
+      expect(attrs[:bbox_xmin]).to be_nil
+    end
+  end
+
+  describe "transportation mapping" do
+    let(:segment_model) do
+      fake_model(%w[id geometry name names subtype segment_class subclass connectors routes
+                    speed_limits sources overture_release created_at updated_at])
+    end
+    let(:connector_model) do
+      fake_model(%w[id geometry sources overture_release created_at updated_at])
+    end
+
+    it "maps segment rule arrays and class to segment_class" do
+      mapper = described_class.for(theme: "transportation", type: "segment", model_class: segment_model)
+      attrs = mapper.call(
+        "id" => "s1", "subtype" => "road", "class" => "residential",
+        "connectors" => [{ "connector_id" => "c1", "at" => 0.0 }],
+        "speed_limits" => [{ "max_speed" => { "value" => 50 } }]
+      )
+
+      expect(attrs[:segment_class]).to eq("residential")
+      expect(attrs[:connectors].first["connector_id"]).to eq("c1")
+      expect(attrs[:speed_limits]).not_to be_nil
+    end
+
+    it "maps connectors to bare id + geometry rows" do
+      mapper = described_class.for(theme: "transportation", type: "connector", model_class: connector_model)
+      attrs = mapper.call("id" => "c1", "geometry" => "POINT (1 2)")
+
+      expect(attrs.keys).to match_array(%i[id geometry sources overture_release created_at updated_at])
+    end
+  end
+
+  describe "base theme mapping" do
+    let(:model) do
+      fake_model(%w[id geometry name names feature_type subtype feature_class surface elevation
+                    level wikidata source_tags sources overture_release created_at updated_at])
+    end
+
+    it "stamps the feature_type discriminator from the imported type" do
+      mapper = described_class.for(theme: "base", type: "water", model_class: model)
+      attrs = mapper.call(
+        "id" => "w1", "subtype" => "lake", "class" => "lake",
+        "names" => { "primary" => "Lake Union" }, "source_tags" => { "natural" => "water" }
+      )
+
+      expect(attrs[:feature_type]).to eq("water")
+      expect(attrs[:feature_class]).to eq("lake")
+      expect(attrs[:name]).to eq("Lake Union")
+      expect(attrs[:source_tags]).to eq({ "natural" => "water" })
     end
   end
 

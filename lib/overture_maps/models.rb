@@ -19,4 +19,7 @@ ActiveSupport.on_load(:active_record) do
   require "overture_maps/models/address"
   require "overture_maps/models/category"
   require "overture_maps/models/division"
+  require "overture_maps/models/segment"
+  require "overture_maps/models/connector"
+  require "overture_maps/models/base_feature"
 end

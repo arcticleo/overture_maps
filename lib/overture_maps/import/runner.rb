@@ -11,11 +11,12 @@ module OvertureMaps
     class Runner
       MAX_STORED_ERRORS = 50
 
-      attr_reader :model_class, :theme, :batch_size, :imported_count, :error_count, :errors
+      attr_reader :model_class, :theme, :type, :batch_size, :imported_count, :error_count, :errors
 
-      def initialize(model_class:, theme: nil, batch_size: nil, mapper: nil, release: nil)
+      def initialize(model_class:, theme: nil, type: nil, batch_size: nil, mapper: nil, release: nil)
         @model_class = model_class
         @theme = theme
+        @type = type
         @release = release
         @batch_size = batch_size || OvertureMaps.configuration.batch_size
         @mapper = mapper
@@ -76,7 +77,7 @@ module OvertureMaps
 
       def default_mapper
         @default_mapper ||= @mapper || RecordMapper.for(
-          theme: theme, model_class: model_class, release: @release
+          theme: theme, type: type, model_class: model_class, release: @release
         )
       end
 

@@ -90,8 +90,12 @@ module OvertureMaps
 
         sql, params = self.class.bbox_query(theme: theme, type: target_type, release: release,
                                             bbox: bbox, limit: limit)
-        QueryEngine.instance.copy_to(sql, params: params, output_path: path,
-                                     format: EXTRACT_FORMATS.fetch(format.to_s.downcase, "parquet"))
+        begin
+          QueryEngine.instance.copy_to(sql, params: params, output_path: path,
+                                       format: EXTRACT_FORMATS.fetch(format.to_s.downcase, "parquet"))
+        rescue QueryEngine::Error, StandardError => e
+          raise release_hint_error(e)
+        end
 
         if File.exist?(path) && File.size(path).positive?
           path
@@ -209,6 +213,26 @@ module OvertureMaps
       end
 
       private
+
+      # Overture prunes old releases; a query against a missing one fails
+      # with an opaque DuckDB error. Add the available releases when the
+      # requested one isn't in the catalog.
+      def release_hint_error(error)
+        available = begin
+          Releases.all
+        rescue StandardError
+          nil
+        end
+
+        if available && !available.include?(release)
+          Import::Error.new(
+            "release #{release} is not available (available: #{available.join(", ")}); " \
+            "original error: #{error.message}"
+          )
+        else
+          error
+        end
+      end
 
       def log(message)
         logger = OvertureMaps.configuration.logger

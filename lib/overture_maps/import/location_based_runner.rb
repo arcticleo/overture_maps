@@ -101,6 +101,23 @@ module OvertureMaps
         @error_count += runner.error_count
         @errors.concat(runner.errors)
         log "#{theme}/#{type}: imported #{runner.imported_count}, errors #{runner.error_count}"
+
+        record_imported_area(type, model_class, runner)
+      end
+
+      # Bookkeeping for overture_maps:sync. Skipped silently when the
+      # tracking table hasn't been migrated yet.
+      def record_imported_area(type, model_class, runner)
+        return unless runner.imported_count.positive?
+        return unless Models::ImportedArea.table_exists?
+
+        Models::ImportedArea.record!(
+          theme: theme, feature_type: type, model_class: model_class,
+          bbox: bbox, release: @release,
+          records_count: runner.imported_count
+        )
+      rescue StandardError => e
+        log "sync tracking skipped: #{e.message}"
       end
 
       def resolve_extract(downloader)

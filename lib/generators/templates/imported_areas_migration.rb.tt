@@ -1,0 +1,20 @@
+class CreateOvertureImportedAreas < ActiveRecord::Migration<%= migration_version %>
+  def change
+    create_table :overture_imported_areas do |t|
+      t.string :theme, null: false
+      t.string :feature_type, null: false
+      t.string :model_class_name, null: false
+      t.string :slug, null: false
+      t.float :bbox_xmin
+      t.float :bbox_xmax
+      t.float :bbox_ymin
+      t.float :bbox_ymax
+      t.string :release, null: false
+      t.integer :records_count, default: 0
+      t.timestamps
+    end
+
+    add_index :overture_imported_areas, [:theme, :feature_type, :slug], unique: true
+    add_index :overture_imported_areas, :release
+  end
+end

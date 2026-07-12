@@ -369,6 +369,95 @@ namespace :overture_maps do
     end
   end
 
+  desc "Sync imported areas to the latest (or given) Overture release"
+  task :sync, [:release] => :environment do |_t, args|
+    unless OvertureMaps::Models::ImportedArea.table_exists?
+      OvertureMaps::RakeUI.abort!(
+        "No sync tracking table. Run: rails generate overture_maps:install && rails db:migrate\n" \
+        "(Areas are tracked from their next import.)"
+      )
+    end
+
+    syncer = OvertureMaps::Syncer.new(target_release: args[:release])
+    areas = OvertureMaps::Models::ImportedArea.count
+    if areas.zero?
+      puts "No imported areas tracked yet. Run an import first."
+      next
+    end
+
+    puts "Syncing #{areas} imported area(s) to #{syncer.target}..."
+    puts
+
+    failures = 0
+    syncer.sync_all.each do |result|
+      area = result.area
+      label = "#{area.theme}/#{area.feature_type} #{area.slug}"
+      case result.status
+      when :up_to_date
+        puts "  #{label}: already at #{syncer.target}"
+      when :synced
+        puts "  #{label}: synced (removed #{result.removed}, upserted #{result.imported}, errors #{result.errors})"
+      when :refreshed
+        puts "  #{label}: fully refreshed (#{result.message})"
+      when :failed
+        puts "  #{label}: FAILED — #{result.message}"
+        failures += 1
+      end
+      failures += 1 if result.errors.positive? && result.status != :failed
+    end
+
+    puts
+    puts failures.zero? ? "Sync complete." : "Sync finished with #{failures} failure(s)."
+    exit 1 if failures.positive? && !ENV["IGNORE_ERRORS"]
+  end
+
+  namespace :sync do
+    desc "Show tracked areas and their releases"
+    task status: :environment do
+      unless OvertureMaps::Models::ImportedArea.table_exists?
+        OvertureMaps::RakeUI.abort!("No sync tracking table. Run: rails generate overture_maps:install && rails db:migrate")
+      end
+
+      latest = OvertureMaps::Releases.latest
+      puts "Latest Overture release: #{latest}"
+      puts
+
+      areas = OvertureMaps::Models::ImportedArea.order(:theme, :feature_type, :slug)
+      if areas.none?
+        puts "No imported areas tracked yet."
+      else
+        areas.each do |area|
+          marker = area.release == latest ? "  " : "! "
+          puts "#{marker}#{area.theme}/#{area.feature_type} #{area.slug}: " \
+               "#{area.release} (#{area.records_count} records)"
+        end
+        behind = areas.count { |a| a.release != latest }
+        puts
+        puts behind.zero? ? "All areas up to date." : "#{behind} area(s) behind — run rails overture_maps:sync"
+      end
+    end
+  end
+
+  namespace :gers do
+    desc "Look up a GERS id in the Overture registry"
+    task :lookup, [:id] do |_t, args|
+      id = args[:id] or OvertureMaps::RakeUI.abort!("Usage: rails overture_maps:gers:lookup[<gers-id>]")
+
+      begin
+        row = OvertureMaps::GERS.lookup(id)
+        if row
+          row.each { |key, value| puts format("  %-14s %s", "#{key}:", value) }
+        else
+          puts "Not found in the registry."
+        end
+      rescue ArgumentError => e
+        OvertureMaps::RakeUI.abort!("Error: #{e.message}")
+      rescue OvertureMaps::Error => e
+        OvertureMaps::RakeUI.abort!("Error: #{e.message}")
+      end
+    end
+  end
+
   namespace :cache do
     desc "List cached extracts"
     task :list do

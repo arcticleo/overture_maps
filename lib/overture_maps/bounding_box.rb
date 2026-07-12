@@ -70,8 +70,11 @@ module OvertureMaps
 
     private
 
+    # Filename-safe and idempotent: a slug that round-trips through
+    # display_name (e.g. from ImportedArea bookkeeping) must come back
+    # unchanged, so dots and dashes survive.
     def sanitized_display_name
-      display_name.downcase.gsub(/[^a-z0-9]+/, "_").gsub(/\A_+|_+\z/, "")
+      display_name.downcase.gsub(/[^a-z0-9.\-]+/, "_").gsub(/\A_+|_+\z/, "")
     end
   end
 end

@@ -36,6 +36,22 @@ RSpec.describe OvertureMaps::BoundingBox do
       expect(bbox.slug).to eq("greater_seattle")
     end
 
+    it "keeps slugs idempotent through a display_name round-trip" do
+      # ImportedArea bookkeeping rebuilds boxes with the stored slug as
+      # display_name; re-slugging must not change it (else bookkeeping rows
+      # fork and extract caches miss).
+      original = described_class.new(lat1: 47.608, lng1: -122.342, lat2: 47.610, lng2: -122.339)
+      round_tripped = described_class.new(
+        lat1: original.min_lat, lng1: original.min_lng,
+        lat2: original.max_lat, lng2: original.max_lng,
+        display_name: original.slug
+      )
+
+      expect(round_tripped.slug).to eq(original.slug)
+      expect(described_class.new(lat1: 1, lng1: 2, lat2: 3, lng2: 4, display_name: "seattle").slug)
+        .to eq("seattle")
+    end
+
     it "returns nil for division names" do
       expect(described_class.parse("Seattle")).to be_nil
       expect(described_class.parse("New York")).to be_nil

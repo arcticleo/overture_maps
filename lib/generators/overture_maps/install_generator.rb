@@ -16,6 +16,7 @@ module OvertureMaps
         migration_template "division_migration.rb.tt", "db/migrate/create_overture_divisions.rb"
         migration_template "transportation_migration.rb.tt", "db/migrate/create_overture_transportation.rb"
         migration_template "base_features_migration.rb.tt", "db/migrate/create_overture_base_features.rb"
+        migration_template "imported_areas_migration.rb.tt", "db/migrate/create_overture_imported_areas.rb"
       end
 
       def create_models

@@ -35,4 +35,7 @@ require "overture_maps/models"
 require "overture_maps/division_search"
 require "overture_maps/import"
 require "overture_maps/query"
+require "overture_maps/gers"
+require "overture_maps/changelog"
+require "overture_maps/syncer"
 require "overture_maps/railtie" if defined?(Rails::Railtie)

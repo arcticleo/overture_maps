@@ -138,6 +138,34 @@ Overture Maps data is organized by **theme** and **type**:
 
 All six themes can be imported and downloaded. Imports cover the types shown above except `building_part` (planned; needs the parent-building relationship). Division imports use `division_area` — the geocodable territories.
 
+## Keeping Data Current
+
+Overture publishes a new release monthly. Every import records its area and
+release in `overture_imported_areas`, and syncing applies the official GERS
+changelog instead of a full reload — removed features are deleted, added and
+changed ones are upserted:
+
+```bash
+rails overture_maps:sync:status    # which areas are behind
+rails overture_maps:sync           # bring everything to the latest release
+rails overture_maps:sync[2026-06-17.0]   # or a specific release
+```
+
+Areas whose release is no longer in the catalog (Overture prunes old
+releases) get a full refresh automatically. Individual features can be
+traced through releases with the registry:
+
+```bash
+rails overture_maps:gers:lookup[1ef5ffe6-cea9-4d4d-98f3-efbedfa4a8d7]
+# first_seen, last_seen, last_changed, bbox, data file path
+```
+
+```ruby
+OvertureMaps::GERS.valid_id?(id)   # dashed UUID (current) or legacy 32-hex
+OvertureMaps::GERS.lookup(id)      # registry row or nil
+OvertureMaps::Changelog.counts(theme: "places", type: "place", release: "2026-06-17.0")
+```
+
 ## Ad-hoc Querying (no import needed)
 
 Query Overture GeoParquet directly — DuckDB pushes the bbox filter down to

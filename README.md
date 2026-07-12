@@ -138,6 +138,41 @@ Overture Maps data is organized by **theme** and **type**:
 
 All six themes can be imported and downloaded. Imports cover the types shown above except `building_part` (planned; needs the parent-building relationship). Division imports use `division_area` — the geocodable territories.
 
+## Ad-hoc Querying (no import needed)
+
+Query Overture GeoParquet directly — DuckDB pushes the bbox filter down to
+row-group statistics, so even against the remote bucket only the relevant
+slice is read:
+
+```ruby
+# Count without downloading anything
+OvertureMaps.query(theme: "places", bbox: [47.5, -122.4, 47.7, -122.2]).count
+
+# Stream records (geometry parsed to RGeo features)
+OvertureMaps.query(theme: "places", location: "Seattle").limit(100).each do |record|
+  puts record.dig("names", "primary")
+end
+
+# Batches, GeoJSON, exports
+query = OvertureMaps.query(theme: "buildings", bbox: "47.5,-122.4,47.7,-122.2")
+query.each_batch(size: 500) { |batch| ... }
+query.limit(1000).to_geojson                 # FeatureCollection hash
+query.export("buildings.geojson")            # or .gpkg / .geojsonseq / .parquet
+
+# Multi-type themes need an explicit type
+OvertureMaps.query(theme: "transportation", type: "segment", location: "Seattle").count
+```
+
+Unlimited queries spool through the same cache files the import pipeline
+uses (`config.cache_dir`), so a query warms the cache for a later import and
+vice versa. Manage the cache with:
+
+```bash
+rails overture_maps:cache:list
+rails overture_maps:cache:clear            # everything
+rails overture_maps:cache:clear[seattle]   # matching extracts only
+```
+
 ## Configuration
 
 ```ruby

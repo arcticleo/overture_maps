@@ -30,6 +30,8 @@ RSpec.describe "rake tasks" do
       overture_maps:download:nearby
       overture_maps:download:versions
       overture_maps:download:themes
+      overture_maps:cache:list
+      overture_maps:cache:clear
       overture_maps:categories:populate
     ].each do |name|
       expect(rake.tasks.map(&:name)).to include(name)

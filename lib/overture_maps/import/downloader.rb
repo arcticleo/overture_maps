@@ -83,12 +83,13 @@ module OvertureMaps
       # Writes a bbox-filtered extract for one type to a local file and
       # returns its path (nil when the area has no data). The extract is
       # named by theme/type/release/area, so later runs reuse it as a cache.
-      def extract_bbox(bbox, format: "parquet", output_path: nil)
+      def extract_bbox(bbox, format: "parquet", output_path: nil, limit: nil)
         target_type = type or raise ArgumentError, "extract_bbox requires a type"
         path = output_path || extract_path(bbox, format: format)
         FileUtils.mkdir_p(File.dirname(path))
 
-        sql, params = self.class.bbox_query(theme: theme, type: target_type, release: release, bbox: bbox)
+        sql, params = self.class.bbox_query(theme: theme, type: target_type, release: release,
+                                            bbox: bbox, limit: limit)
         QueryEngine.instance.copy_to(sql, params: params, output_path: path,
                                      format: EXTRACT_FORMATS.fetch(format.to_s.downcase, "parquet"))
 
@@ -188,7 +189,7 @@ module OvertureMaps
       # semantics: any feature whose bbox overlaps the query box is included,
       # matching what "give me this area" means (the old strict-containment
       # filter silently dropped everything touching the boundary).
-      def self.bbox_query(theme:, type:, release:, bbox:)
+      def self.bbox_query(theme:, type:, release:, bbox:, limit: nil)
         raise ArgumentError, "unknown theme: #{theme}" unless THEMES.include?(theme)
         raise ArgumentError, "unknown type #{type} for #{theme}" unless TYPES[theme].include?(type)
 
@@ -199,6 +200,7 @@ module OvertureMaps
           WHERE bbox.xmin <= ? AND bbox.xmax >= ?
             AND bbox.ymin <= ? AND bbox.ymax >= ?
         SQL
+        sql += "LIMIT #{Integer(limit)}\n" if limit
         [sql, [bbox.max_lng, bbox.min_lng, bbox.max_lat, bbox.min_lat]]
       end
 

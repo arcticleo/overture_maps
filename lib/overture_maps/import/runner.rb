@@ -101,37 +101,10 @@ module OvertureMaps
         @errors << { error: message, record_id: record_id } if @errors.length < MAX_STORED_ERRORS
       end
 
-      # Overture geometry arrives as WKB (binary or hex, from parquet), WKT
-      # (from DuckDB text output), or GeoJSON. A geometry that fails to parse
-      # skips that record — it must never abort the import loop.
+      # A geometry that fails to parse skips that record — it must never
+      # abort the import loop (see transform_record's rescue).
       def parse_geometry(geom)
-        return nil if geom.nil?
-        return geom if geom.is_a?(RGeo::Feature::Instance)
-
-        factory = self.class.geo_factory
-
-        case geom
-        when Hash
-          RGeo::GeoJSON.decode(geom, geo_factory: factory)
-        when String
-          parse_geometry_string(geom, factory)
-        end
-      end
-
-      def parse_geometry_string(geom, factory)
-        stripped = geom.strip
-        if stripped.start_with?("{")
-          RGeo::GeoJSON.decode(stripped, geo_factory: factory)
-        elsif stripped.match?(/\A[A-Za-z]/)
-          factory.parse_wkt(stripped)
-        else
-          # Binary or hex WKB; RGeo's parser auto-detects hex strings.
-          factory.parse_wkb(geom)
-        end
-      end
-
-      def self.geo_factory
-        @geo_factory ||= RGeo::Geographic.spherical_factory(srid: 4326)
+        GeometryParser.parse(geom)
       end
     end
   end

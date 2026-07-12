@@ -369,6 +369,40 @@ namespace :overture_maps do
     end
   end
 
+  namespace :cache do
+    desc "List cached extracts"
+    task :list do
+      dir = OvertureMaps.configuration.cache_dir
+      files = Dir.glob(File.join(dir, "*.{parquet,geojson,geojsonseq,gpkg}")).sort
+
+      if files.empty?
+        puts "No cached extracts in #{dir}"
+      else
+        total = 0
+        files.each do |f|
+          size = File.size(f)
+          total += size
+          puts "  #{File.basename(f)} (#{OvertureMaps::Util.format_size(size)})"
+        end
+        puts "Total: #{files.count} file(s), #{OvertureMaps::Util.format_size(total)}"
+      end
+    end
+
+    desc "Remove cached extracts (optionally matching a pattern)"
+    task :clear, [:pattern] do |_t, args|
+      dir = OvertureMaps.configuration.cache_dir
+      pattern = args[:pattern] ? "*#{args[:pattern]}*" : "*"
+      files = Dir.glob(File.join(dir, "#{pattern}.{parquet,geojson,geojsonseq,gpkg}"))
+
+      if files.empty?
+        puts "Nothing to remove"
+      else
+        files.each { |f| File.delete(f) }
+        puts "Removed #{files.count} file(s)"
+      end
+    end
+  end
+
   namespace :categories do
     CATEGORIES_CSV_URL = "https://raw.githubusercontent.com/OvertureMaps/schema/main/docs/schema/concepts/by-theme/places/overture_categories.csv"
 
